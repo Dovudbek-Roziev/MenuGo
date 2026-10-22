@@ -10,6 +10,7 @@
     "dev": "node --env-file-if-exists=.env --watch --import tsx src/index.ts",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "seed": "node --env-file-if-exists=.env --import tsx src/scripts/seedDemo.ts",
+    "verify:orders": "node --env-file-if-exists=.env --import tsx src/scripts/verifyOrders.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc"
   },

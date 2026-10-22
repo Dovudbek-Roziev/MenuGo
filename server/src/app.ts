@@ -4,6 +4,7 @@ import type { ServerConfig } from "./config.js";
 import { getDatabaseStatus } from "./database.js";
 import { errorHandler, notFound } from "./middleware/errors.js";
 import { createPublicMenuRouter } from "./routes/publicMenu.js";
+import { createPublicOrdersRouter } from "./routes/publicOrders.js";
 
 export function createApp(config: ServerConfig) {
   const app = express();
@@ -21,6 +22,7 @@ export function createApp(config: ServerConfig) {
   });
 
   app.use("/api/public", createPublicMenuRouter(config));
+  app.use("/api/public", createPublicOrdersRouter(config));
 
   app.use(notFound);
   app.use(errorHandler);
