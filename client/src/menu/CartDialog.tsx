@@ -27,6 +27,11 @@ export default function CartDialog({ lines, total, onClose, onChange, onClear, r
       const first = focusable[0];
       const last = focusable.at(-1);
       if (!first || !last) return;
+      if (!dialogRef.current?.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     };
@@ -48,14 +53,14 @@ export default function CartDialog({ lines, total, onClose, onChange, onClear, r
               {lines.map(({ dish, quantity, total: lineTotal }) => (
                 <li key={dish.id} className="cart-line">
                   <div className="cart-line-heading"><h3>{dish.name}</h3><strong>{format.format(lineTotal)} сом</strong></div>
-                  <div className="cart-line-bottom"><span>{format.format(dish.priceSom)} сом / шт.</span><div className="cart-stepper"><button type="button" onClick={() => onChange(dish.id, -1)} aria-label={`Уменьшить количество: ${dish.name}`}>−</button><span aria-live="polite">{quantity}</span><button type="button" onClick={() => onChange(dish.id, 1)} disabled={quantity >= 99} aria-label={`Увеличить количество: ${dish.name}`}>+</button></div></div>
+                  <div className="cart-line-bottom"><span>{format.format(dish.priceSom)} сом / шт.</span><div className="cart-stepper"><button type="button" onClick={() => { if (quantity === 1) closeRef.current?.focus(); onChange(dish.id, -1); }} aria-label={`Уменьшить количество: ${dish.name}`}>−</button><span aria-live="polite">{quantity}</span><button type="button" onClick={() => onChange(dish.id, 1)} disabled={quantity >= 99} aria-label={`Увеличить количество: ${dish.name}`}>+</button></div></div>
                 </li>
               ))}
             </ul>
           ) : <div className="cart-empty"><h3>Корзина пока пуста</h3><p>Выберите блюда из меню, чтобы увидеть их здесь.</p></div>}
         </div>
         <div className="cart-bottom">
-          {lines.length > 0 && <><div className="cart-total"><span>Итого</span><strong>{format.format(total)} сом</strong></div><button type="button" className="cart-clear" onClick={onClear}>Очистить корзину</button></>}
+          {lines.length > 0 && <><div className="cart-total"><span>Итого</span><strong>{format.format(total)} сом</strong></div><button type="button" className="cart-clear" onClick={() => { closeRef.current?.focus(); onClear(); }}>Очистить корзину</button></>}
           <p>Заказ пока недоступен. Корзина помогает посчитать выбранные блюда.</p>
         </div>
       </div>
