@@ -3,6 +3,7 @@ import cors from "cors";
 import type { ServerConfig } from "./config.js";
 import { getDatabaseStatus } from "./database.js";
 import { errorHandler, notFound } from "./middleware/errors.js";
+import { createPublicMenuRouter } from "./routes/publicMenu.js";
 
 export function createApp(config: ServerConfig) {
   const app = express();
@@ -18,6 +19,8 @@ export function createApp(config: ServerConfig) {
       message: "Сервер работает.",
     });
   });
+
+  app.use("/api/public", createPublicMenuRouter(config));
 
   app.use(notFound);
   app.use(errorHandler);
