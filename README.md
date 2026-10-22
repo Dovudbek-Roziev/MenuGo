@@ -1,22 +1,40 @@
-# MenuGo — tanishtiruv sayti
+# MenuGo
 
-Kafelar uchun QR menyu va buyurtma xizmati g‘oyasini tanishtiruvchi ruscha sayt. Faqat frontend: React + Vite + TypeScript. Server, login, ma’lumotlar bazasi va haqiqiy buyurtma tizimi yo‘q.
+MenuGo — проект QR-меню и заказов для кафе. Сначала планируется проверка идеи в одном кафе, затем — развитие сервиса по подписке для других заведений.
 
-## Lokal ishga tushirish
+**Сейчас сайт — статическая демонстрация.** Меню в телефоне, цены, столы и панель кафе являются примерами интерфейса. Навигация работает, но сайт не отправляет заказы и не обращается к серверу. Авторизация, управление кафе, меню, корзина, заказы, оплата и подписки пока не реализованы.
 
-Node.js **20.19+** kerak (20.20.2 bilan tekshirildi). Node.js 22 ishlatilsa, **22.12+** bo‘lsin. npm Node bilan birga o‘rnatiladi.
+В `server/` добавлена только основа API: Express 5, подключение Mongoose, проверка состояния и обработка ошибок. Моделей данных и бизнес-функций нет.
 
-Terminalni `MenuGo` papkasida oching:
+## Требования и переход на Node.js 24
+
+Для проекта используйте **Node.js 24 LTS** и поставляемый с ним npm. Сервер рассчитан на Node `>=24 <25`. Выбраны Express `5.3.0`, Mongoose `9.11.3`, TypeScript `5.9.3`, tsx `4.23.15`. Зависимости зафиксированы в `server/package-lock.json`; у клиента отдельный lock-файл.
+
+Основа сервера проверена на Node.js `24.22.1`: проверка типов, сборка, запуск исходников и собранного кода, ответы состояния без базы и при ошибке подключения, CORS и ответы 400/404/413/500. После настройки локального `.env` проверка `/api/health` также вернула `database: "connected"` для MongoDB Atlas. Первый тест Node.js 24 проводился без замены системного Node.js; позднее Node.js 24 был установлен пользователем.
+
+Совместимость проверена по требованиям пакетов: [Express 5 требует Node.js 18+](https://expressjs.com/en/5x/api/), Mongoose 9.11.3 указывает Node.js 20.19+, поэтому Node.js 24 удовлетворяет обоим требованиям. Статус Node.js 24 LTS указан на [официальной странице выпусков](https://nodejs.org/en/about/previous-releases).
+
+Если `node --version` показывает Node 20, обновите его вручную в Windows:
+
+1. Остановите локальные серверы сочетанием `Ctrl+C`, закройте VS Code.
+2. Откройте [официальный каталог Node.js 24](https://nodejs.org/dist/latest-v24.x/). Для Windows x64 скачайте установщик `node-v24.…-x64.msi`.
+3. Запустите установщик и завершите установку с добавлением Node.js в PATH. Сам проект системный Node не заменяет.
+4. Снова откройте VS Code и новый терминал. Выполните `node --version` и `npm --version`: версия Node должна начинаться с `v24.`. Если осталась старая версия, команда `where.exe node` покажет найденные пути; проверьте порядок PATH.
+5. В папках `client/` и `server/` выполните `npm ci`, используя отдельные lock-файлы.
+
+## Запуск сайта
+
+Из корневой папки MenuGo:
 
 ```powershell
 cd client
-npm install
+npm ci
 npm run dev
 ```
 
-Brauzerda terminal ko‘rsatgan manzilni oching: odatda **http://127.0.0.1:5173/**. Port band bo‘lsa, Vite keyingi portni tanlaydi. To‘xtatish: `Ctrl+C`.
+Откройте адрес из терминала, обычно **http://127.0.0.1:5173/**. Если порт занят, Vite выбирает следующий. Для остановки нажмите `Ctrl+C`.
 
-Tekshirish va ishlab chiqarish uchun build (`client/` ichida):
+Проверка и сборка клиента, из `client/`:
 
 ```powershell
 npm run typecheck
@@ -24,31 +42,104 @@ npm run build
 npm run preview
 ```
 
-`preview` tayyor buildni lokal ko‘rsatadi, odatda http://127.0.0.1:4173/. Build natijasi `client/dist/` ichiga tushadi. Bu deploy emas.
+Сборка находится в `client/dist/`. Команда `preview` показывает её локально, обычно на http://127.0.0.1:4173/; это не развёртывание сайта.
 
-## Tuzilma
+## Запуск сервера без MongoDB
 
-- `client/src/App.tsx` — sahifa, telefon va kafe paneli namunalari.
-- `client/src/styles.css` — ranglar, responsive dizayn va reduced-motion qoidalari.
-- `client/src/main.tsx` — React kirish nuqtasi, lokal Manrope shriftlari.
-- `client/public/brand/menugo.jpg` — tasdiqlangan logo, asl fayldan o‘zgartirmasdan nusxalangan.
-- `client/index.html`, `vite.config.ts`, `tsconfig.json`, `package.json` — loyiha sozlamalari.
+В отдельном терминале из корня MenuGo:
 
-## Dizayn va brend
+```powershell
+cd server
+npm ci
+npm run dev
+```
 
-Asosiy ranglar: to‘q yashil `#103f33`, iliq krem `#f8f5eb`, och yashil aksent `#c4da72`. Manrope shriftining lotin va kirill fayllari npm orqali lokal saqlanadi; Google Fonts yoki tashqi rasm serveriga murojaat yo‘q.
+Сервер слушает только локальный адрес **http://127.0.0.1:4000/**. Команда `dev` перезапускает его при изменении исходников. Файл `.env` необязателен: при его отсутствии используются значения по умолчанию, а MongoDB не подключается. После изменения `.env` перезапустите сервер вручную.
 
-Logo manbasi: foydalanuvchi ko‘rsatgan `Downloads/Telegram Desktop/photo_2026-10-21_22-43-16.jpg`. Asl JPG o‘zgartirilmagan va yakuniy brend blokida to‘liq ko‘rsatiladi. Foydalanuvchining keyingi so‘roviga ko‘ra header uchun `client/public/brand/menugo-symbol.svg` tayyorlangan: asl belgining konturlari vektorga o‘tkazilgan, krem fon uchun «M» va vilka to‘q yashil, barg och yashil qilingan. Headerda bu fonsiz belgi MenuGo yozuvi bilan bir qatorda turadi. Promo video faqat dizayn namunasi, loyihaga kiritilmagan.
+Для собственных локальных настроек один раз создайте `.env`, если его ещё нет:
 
-Sifatli taom suratlari berilmagan: menyu hozir matnli. Keyingi vizual boyitish uchun tasdiqlangan taom suratlari kerak. Tasodifiy internet rasmlari, emoji va soxta rasm o‘rinbosarlari ishlatilmagan.
+```powershell
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+```
 
-## Nima ishlaydi, nima demo
+Переменные из `server/.env.example`:
 
-- Navigatsiya, «Как это работает», «Для кафе», «Готовимся к запуску» va «Наверх» havolalari sahifa bo‘limlariga o‘tadi.
-- Sahifa telefon va katta ekranlarga moslashadi; klaviatura fokusi, asosiy mazmunga o‘tish havolasi va `prefers-reduced-motion` mavjud.
-- Telefon menyusi — statik demo: stol raqami, kategoriyalar, taomlar, tarkib va namunaviy narxlar. Kategoriyalar tugma emas; buyurtma yuborilmaydi.
-- Kafe paneli — statik «Пример интерфейса». Stol, holat, taom va narxlar faqat namunaviy ma’lumot; boshqaruv funksiyalari yo‘q.
-- Haqiqiy QR, savat, buyurtma, to‘lov, login, obuna, server va ma’lumotlar bazasi qurilmagan. Kontaktlar, tariflar, mijozlar yoki natijalar to‘qib chiqarilmagan.
-- Sayt rus tilida. Til almashtirgich yo‘q.
+| Переменная | По умолчанию | Назначение |
+| --- | --- | --- |
+| `PORT` | `4000` | Порт HTTP-сервера, число от 1 до 65535. |
+| `MONGO_URI` | Пусто | Строка подключения MongoDB. Пустое значение позволяет работать без базы. |
+| `FRONTEND_URL` | `http://127.0.0.1:5173` | Разрешённый источник браузерных запросов для CORS. |
 
-GitHub’ga push va deploy qilinmagan. Keyingi bosqich faqat lokal ko‘rib chiqish va foydalanuvchi tasdig‘idan so‘ng.
+Если Vite запущен на другом порту или через `localhost`, укажите точный адрес в `FRONTEND_URL`. CORS не подключает статический сайт к API автоматически и не является авторизацией.
+
+В примере приведён только локальный адрес MongoDB без пароля. Настоящие учётные данные и адреса размещайте исключительно в локальном `.env`. Они не должны попадать в README, исходники или Git. Сервер не печатает `MONGO_URI`, пароли, исходные объекты ошибок драйвера и их стеки.
+
+### Проверка состояния
+
+Не останавливая сервер, выполните в другом PowerShell-терминале:
+
+```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:4000/api/health
+```
+
+Без `MONGO_URI` ответ имеет HTTP-статус `200` и JSON:
+
+```json
+{
+  "status": "ok",
+  "database": "not_configured",
+  "message": "Сервер работает."
+}
+```
+
+Значения `database`:
+
+| Значение | Описание |
+| --- | --- |
+| `not_configured` | Строка `MONGO_URI` отсутствует или пуста. |
+| `disconnected` | Строка указана, но активного соединения нет: подключение ещё выполняется, завершилось ошибкой или было потеряно. |
+| `connected` | Mongoose сообщает об активном соединении. |
+
+Это проверка работы HTTP-сервера, а не готовности будущих бизнес-функций: `/api/health` возвращает `200` и при недоступной MongoDB. Подключение не блокирует запуск HTTP. Первичная попытка ограничена таймаутом около пяти секунд; после её ошибки сервер продолжает работать, а после исправления настроек нужен перезапуск. Уже установленное соединение драйвер может восстанавливать автоматически.
+
+Неизвестный адрес, например `/api/unknown`, возвращает `404` и `{"message":"API-маршрут не найден."}`. Некорректный JSON возвращает `400`, тело запроса больше 16 КБ — `413`, непредвиденная ошибка — `500`. Сообщения об ошибках — на русском языке, без технических подробностей и секретов.
+
+### Проверка и сборка сервера
+
+Из `server/`:
+
+```powershell
+npm run typecheck
+npm run build
+npm start
+```
+
+TypeScript компилируется в `server/dist/`, команда `start` запускает собранный JavaScript. Для `dev` и `start` используется встроенная загрузка необязательного `.env` в Node.js 24. Для остановки — `Ctrl+C`; сервер закрывает HTTP и соединение с базой.
+
+## Структура
+
+```text
+client/
+  public/brand/         Исходный логотип и векторный символ для навигации
+  src/                 Статический сайт React, стили, локальные шрифты Manrope
+  package-lock.json    Зафиксированные зависимости клиента
+server/
+  .env.example         Образец локальных настроек без секретов
+  src/
+    app.ts             Express, CORS и маршрут состояния
+    config.ts          Чтение и проверка настроек
+    database.ts        Подключение Mongoose и состояние базы
+    index.ts           Запуск и завершение работы сервера
+    middleware/errors.ts  Ответы 404 и обработка ошибок
+  package-lock.json    Зафиксированные зависимости сервера
+```
+
+Корневой `.gitignore` исключает `node_modules/`, `dist/`, результаты сборки и настоящие `.env` в обеих папках. `.env.example`, логотипы и оба `package-lock.json` должны храниться в Git.
+
+## Дизайн и демонстрационные данные
+
+Цвета сайта: тёмно-зелёный `#103f33`, тёплый кремовый `#f8f5eb`, светло-зелёный акцент `#c4da72`. Шрифт Manrope хранится локально; внешние серверы шрифтов и случайные фотографии не используются. При включённом уменьшении движения анимации отключаются.
+
+Утверждённый JPG-логотип сохранён без изменений в `client/public/brand/menugo.jpg`. Для навигации используется векторный символ `menugo-symbol.svg`, полученный из его контуров: тёмно-зелёные «M» и вилка, светло-зелёный лист. Проморолик использовался только как ориентир и не включён в проект.
+
+Телефонное меню и панель кафе — статические макеты; цены и заказы условные. Категории не являются работающими фильтрами. Для добавления фотографий нужны утверждённые изображения блюд. Контакты, тарифы, клиенты и показатели не выдуманы. Все интерфейсные тексты — на русском, переключателя языков нет.
