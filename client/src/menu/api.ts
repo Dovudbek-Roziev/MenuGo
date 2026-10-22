@@ -31,10 +31,10 @@ function isGuestMenuData(value: unknown): value is GuestMenuData {
   const menu = value as Partial<GuestMenuData>;
   return typeof menu.cafe?.name === "string" && typeof menu.table?.name === "string" &&
     Array.isArray(menu.categories) && menu.categories.every((category) =>
-      typeof category.id === "string" && typeof category.name === "string" &&
+      typeof category.id === "string" && category.id.length > 0 && typeof category.name === "string" &&
       Array.isArray(category.dishes) && category.dishes.every((dish) =>
-        typeof dish.id === "string" && typeof dish.name === "string" &&
-        typeof dish.description === "string" && Number.isInteger(dish.priceSom),
+        typeof dish.id === "string" && dish.id.length > 0 && typeof dish.name === "string" &&
+        typeof dish.description === "string" && Number.isSafeInteger(dish.priceSom) && dish.priceSom >= 0,
       ),
     );
 }

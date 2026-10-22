@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchGuestMenu } from "./api";
+import { cartLines, cartStorageKey, changeQuantity, readCart, reconcileCart, writeCart, type CartItem } from "./cart";
+import CartDialog from "./CartDialog";
 import { MenuRequestError, type GuestMenuData, type MenuErrorKind } from "./types";
 import "./guest-menu.css";
 
@@ -25,20 +27,36 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
   const [view, setView] = useState<ViewState>({ status: "loading" });
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [removedNotice, setRemovedNotice] = useState(false);
+  const lastTriggerRef = useRef<HTMLButtonElement>(null);
+  const storageKey = cartStorageKey(cafeSlug, tableCode);
+  const closeCart = useCallback(() => setCartOpen(false), []);
 
   useEffect(() => {
     const controller = new AbortController();
     setView({ status: "loading" });
     setSelectedCategory(null);
+    setCartOpen(false);
+    setCart([]);
+    setRemovedNotice(false);
     fetchGuestMenu(cafeSlug, tableCode, controller.signal).then(
-      (data) => { if (!controller.signal.aborted) setView({ status: "ready", data }); },
+      (data) => {
+        if (controller.signal.aborted) return;
+        const reconciled = reconcileCart(readCart(storageKey), data);
+        writeCart(storageKey, reconciled.items);
+        setCart(reconciled.items);
+        setRemovedNotice(reconciled.removed);
+        setView({ status: "ready", data });
+      },
       (error: unknown) => {
         if (controller.signal.aborted) return;
         setView({ status: "error", kind: error instanceof MenuRequestError ? error.kind : "connection" });
       },
     );
     return () => controller.abort();
-  }, [cafeSlug, tableCode, attempt]);
+  }, [cafeSlug, tableCode, storageKey, attempt]);
 
   const data = view.status === "ready" ? view.data : null;
   const categories = data?.categories ?? [];
@@ -47,9 +65,28 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
     : categories.filter((category) => category.id === selectedCategory);
   const hasDishes = categories.some((category) => category.dishes.length > 0);
   const price = new Intl.NumberFormat("ru-RU");
+  const lines = data ? cartLines(cart, data) : [];
+  const totalCount = lines.reduce((sum, line) => sum + line.quantity, 0);
+  const totalPrice = lines.reduce((sum, line) => sum + line.total, 0n);
+
+  function updateCart(id: string, change: number) {
+    const next = changeQuantity(cart, id, change);
+    setCart(next);
+    writeCart(storageKey, next);
+  }
+
+  function clearCart() {
+    setCart([]);
+    writeCart(storageKey, []);
+  }
+
+  function openCart(event: React.MouseEvent<HTMLButtonElement>) {
+    lastTriggerRef.current = event.currentTarget;
+    setCartOpen(true);
+  }
 
   return (
-    <div className="guest-page">
+    <div className={`guest-page${data ? " guest-page--cart" : ""}`}>
       <a className="skip-link" href="#guest-main">Перейти к меню</a>
       <header className="guest-header">
         <div className="guest-container guest-header-inner">
@@ -97,6 +134,7 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
             )}
           </div>
         )}
+        {data && removedNotice && <p className="cart-notice" role="status">Некоторые блюда больше не доступны и удалены из корзины.</p>}
         {data && !hasDishes && (
           <div className="guest-state" role="status">
             <span className="guest-state-line" aria-hidden="true" />
@@ -106,6 +144,7 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
         )}
         {data && hasDishes && (
           <>
+            <div className="guest-cart-desktop"><button type="button" onClick={openCart}>Корзина <span>{totalCount} · {price.format(totalPrice)} сом</span></button></div>
             <nav className="guest-filters" aria-label="Категории меню">
               <button type="button" className={selectedCategory === null ? "active" : ""} aria-pressed={selectedCategory === null} onClick={() => setSelectedCategory(null)}>Всё меню</button>
               {categories.map((category) => (
@@ -121,7 +160,9 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
                       {category.dishes.map((dish) => (
                         <article className="guest-dish" key={dish.id}>
                           <div><h3>{dish.name}</h3>{dish.description && <p>{dish.description}</p>}</div>
-                          <strong>{price.format(dish.priceSom)} сом</strong>
+                          <div className="guest-dish-actions"><strong>{price.format(dish.priceSom)} сом</strong>{cart.find((item) => item.id === dish.id) ? (
+                            <div className="cart-stepper"><button type="button" onClick={() => updateCart(dish.id, -1)} aria-label={`Уменьшить количество: ${dish.name}`}>−</button><span>{cart.find((item) => item.id === dish.id)?.quantity}</span><button type="button" onClick={() => updateCart(dish.id, 1)} disabled={cart.find((item) => item.id === dish.id)?.quantity === 99} aria-label={`Увеличить количество: ${dish.name}`}>+</button></div>
+                          ) : <button className="guest-add" type="button" onClick={() => updateCart(dish.id, 1)}>Добавить</button>}</div>
                         </article>
                       ))}
                     </div>
@@ -132,6 +173,8 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
           </>
         )}
       </main>
+      {data && <button type="button" className="guest-cart-bar" onClick={openCart}><span>Корзина · {totalCount} шт.</span><strong>{price.format(totalPrice)} сом</strong></button>}
+      {data && cartOpen && <CartDialog lines={lines} total={totalPrice} onClose={closeCart} onChange={updateCart} onClear={clearCart} returnFocus={lastTriggerRef} />}
       <footer className="guest-footer guest-container"><span>MenuGo</span><p>Просмотр меню · Оформление заказа пока недоступно</p></footer>
     </div>
   );
