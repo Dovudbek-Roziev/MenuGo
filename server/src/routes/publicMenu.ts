@@ -57,11 +57,12 @@ export function createPublicMenuRouter(config: ServerConfig) {
         .select("categoryId name description priceSom")
         .lean();
 
-      const dishesByCategory = new Map<string, Array<{ name: string; description: string; priceSom: number }>>();
+      const dishesByCategory = new Map<string, Array<{ id: string; name: string; description: string; priceSom: number }>>();
       for (const dish of dishes) {
         const key = dish.categoryId.toString();
         const categoryDishes = dishesByCategory.get(key) ?? [];
         categoryDishes.push({
+          id: dish._id.toString(),
           name: dish.name,
           description: dish.description,
           priceSom: dish.priceSom,
@@ -73,6 +74,7 @@ export function createPublicMenuRouter(config: ServerConfig) {
         cafe: { name: cafe.name, slug: cafe.slug },
         table: { name: table.name },
         categories: categories.map((category) => ({
+          id: category._id.toString(),
           name: category.name,
           dishes: dishesByCategory.get(category._id.toString()) ?? [],
         })),
