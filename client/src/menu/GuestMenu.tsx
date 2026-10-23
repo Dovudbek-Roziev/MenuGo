@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchGuestMenu } from "./api";
 import { cartLines, cartStorageKey, changeQuantity, readCart, reconcileCart, writeCart, type CartItem } from "./cart";
 import CartDialog from "./CartDialog";
+import { clearPending, pendingStorageKey, readPending, savePending, submitOrder, OrderRequestError, type OrderErrorKind, type OrderReceipt, type PendingOrder } from "./orders";
 import { MenuRequestError, type GuestMenuData, type MenuErrorKind } from "./types";
 import "./guest-menu.css";
 
@@ -30,24 +31,55 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [removedNotice, setRemovedNotice] = useState(false);
+  const [orderError, setOrderError] = useState<OrderErrorKind | "storage" | null>(null);
+  const [pending, setPending] = useState<PendingOrder | null>(() => readPending(pendingStorageKey(cafeSlug, tableCode)));
+  const [sending, setSending] = useState(false);
+  const [retryAt, setRetryAt] = useState<number | undefined>();
+  const [now, setNow] = useState(Date.now());
+  const [receipt, setReceipt] = useState<OrderReceipt | null>(null);
+  const [priceNotice, setPriceNotice] = useState(false);
+  const sendingRef = useRef(false);
   const lastTriggerRef = useRef<HTMLButtonElement>(null);
   const storageKey = cartStorageKey(cafeSlug, tableCode);
+  const pendingKey = pendingStorageKey(cafeSlug, tableCode);
   const closeCart = useCallback(() => setCartOpen(false), []);
+
+  useEffect(() => {
+    setPending(readPending(pendingKey));
+    setOrderError(null);
+    setReceipt(null);
+    setRetryAt(undefined);
+    setPriceNotice(false);
+    sendingRef.current = false;
+    setSending(false);
+  }, [pendingKey]);
+
+  useEffect(() => {
+    if (!retryAt || retryAt <= Date.now()) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [retryAt]);
 
   useEffect(() => {
     const controller = new AbortController();
     setView({ status: "loading" });
     setSelectedCategory(null);
-    setCartOpen(false);
+    if (attempt === 0) setCartOpen(false);
     setCart([]);
     setRemovedNotice(false);
     fetchGuestMenu(cafeSlug, tableCode, controller.signal).then(
       (data) => {
         if (controller.signal.aborted) return;
-        const reconciled = reconcileCart(readCart(storageKey), data);
-        writeCart(storageKey, reconciled.items);
-        setCart(reconciled.items);
-        setRemovedNotice(reconciled.removed);
+        const existingPending = readPending(pendingKey);
+        if (existingPending) {
+          setPending(existingPending);
+          setCart(existingPending.items.map((item) => ({ id: item.dishId, quantity: item.quantity })));
+        } else {
+          const reconciled = reconcileCart(readCart(storageKey), data);
+          writeCart(storageKey, reconciled.items);
+          setCart(reconciled.items);
+          setRemovedNotice(reconciled.removed);
+        }
         setView({ status: "ready", data });
       },
       (error: unknown) => {
@@ -56,7 +88,7 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
       },
     );
     return () => controller.abort();
-  }, [cafeSlug, tableCode, storageKey, attempt]);
+  }, [cafeSlug, tableCode, storageKey, pendingKey, attempt]);
 
   const data = view.status === "ready" ? view.data : null;
   const categories = data?.categories ?? [];
@@ -68,14 +100,62 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
   const lines = data ? cartLines(cart, data) : [];
   const totalCount = lines.reduce((sum, line) => sum + line.quantity, 0);
   const totalPrice = lines.reduce((sum, line) => sum + line.total, 0n);
+  const locked = pending !== null || sending;
+  const retrySeconds = retryAt ? Math.max(0, Math.ceil((retryAt - now) / 1000)) : 0;
+
+  async function sendOrder() {
+    if (sendingRef.current || view.status !== "ready") return;
+    let current = readPending(pendingKey) ?? pending;
+    if (!current) {
+      if (!lines.length || lines.length > 50 || totalPrice > BigInt(Number.MAX_SAFE_INTEGER)) {
+        setOrderError("bad_request"); return;
+      }
+      current = { requestId: crypto.randomUUID(), items: lines.map((line) => ({ dishId: line.dish.id, quantity: line.quantity })), expectedTotalSom: Number(totalPrice) };
+      if (!savePending(pendingKey, current)) { setOrderError("storage"); return; }
+      setPending(current);
+    }
+    if (retryAt && retryAt > Date.now()) return;
+    sendingRef.current = true;
+    setSending(true);
+    setOrderError(null);
+    try {
+      const result = await submitOrder(cafeSlug, tableCode, current);
+      // A confirmed response is the only point at which the cart can be cleared.
+      if (clearPending(pendingKey)) {
+        writeCart(storageKey, []);
+        setPending(null);
+        setCart([]);
+      }
+      setReceipt(result);
+      setRetryAt(undefined);
+    } catch (error) {
+      const kind = error instanceof OrderRequestError ? error.kind : "network";
+      if (kind === "price_changed" || kind === "conflict" || kind === "bad_request" || kind === "not_found") {
+        if (clearPending(pendingKey)) setPending(null);
+        if (kind === "price_changed" || kind === "conflict") {
+          setPriceNotice(kind === "price_changed");
+          setAttempt((value) => value + 1);
+        }
+      }
+      setOrderError(kind);
+      setRetryAt(error instanceof OrderRequestError ? error.retryAt : undefined);
+      setNow(Date.now());
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  }
 
   function updateCart(id: string, change: number) {
+    if (locked) return;
     const next = changeQuantity(cart, id, change);
+    if (next !== cart) setReceipt(null);
     setCart(next);
     writeCart(storageKey, next);
   }
 
   function clearCart() {
+    if (locked || receipt) return;
     setCart([]);
     writeCart(storageKey, []);
   }
@@ -135,6 +215,7 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
           </div>
         )}
         {data && removedNotice && <p className="cart-notice" role="status">Некоторые блюда больше не доступны и удалены из корзины.</p>}
+        {data && priceNotice && <p className="cart-notice" role="status">Цены в меню изменились. Проверьте новую сумму и отправьте заказ ещё раз.</p>}
         {data && !hasDishes && (
           <div className="guest-state" role="status">
             <span className="guest-state-line" aria-hidden="true" />
@@ -161,8 +242,8 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
                         <article className="guest-dish" key={dish.id}>
                           <div><h3>{dish.name}</h3>{dish.description && <p>{dish.description}</p>}</div>
                           <div className="guest-dish-actions"><strong>{price.format(dish.priceSom)} сом</strong>{cart.find((item) => item.id === dish.id) ? (
-                            <div className="cart-stepper"><button type="button" onClick={() => updateCart(dish.id, -1)} aria-label={`Уменьшить количество: ${dish.name}`}>−</button><span>{cart.find((item) => item.id === dish.id)?.quantity}</span><button type="button" onClick={() => updateCart(dish.id, 1)} disabled={cart.find((item) => item.id === dish.id)?.quantity === 99} aria-label={`Увеличить количество: ${dish.name}`}>+</button></div>
-                          ) : <button className="guest-add" type="button" onClick={() => updateCart(dish.id, 1)}>Добавить</button>}</div>
+                            <div className="cart-stepper"><button type="button" onClick={() => updateCart(dish.id, -1)} disabled={locked} aria-label={`Уменьшить количество: ${dish.name}`}>−</button><span>{cart.find((item) => item.id === dish.id)?.quantity}</span><button type="button" onClick={() => updateCart(dish.id, 1)} disabled={locked || cart.find((item) => item.id === dish.id)?.quantity === 99} aria-label={`Увеличить количество: ${dish.name}`}>+</button></div>
+                          ) : <button className="guest-add" type="button" disabled={locked} onClick={() => updateCart(dish.id, 1)}>Добавить</button>}</div>
                         </article>
                       ))}
                     </div>
@@ -174,8 +255,8 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
         )}
       </main>
       {data && <button type="button" className="guest-cart-bar" onClick={openCart}><span>Корзина · {totalCount} шт.</span><strong>{price.format(totalPrice)} сом</strong></button>}
-      {data && cartOpen && <CartDialog lines={lines} total={totalPrice} onClose={closeCart} onChange={updateCart} onClear={clearCart} returnFocus={lastTriggerRef} />}
-      <footer className="guest-footer guest-container"><span>MenuGo</span><p>Просмотр меню · Оформление заказа пока недоступно</p></footer>
+      {data && cartOpen && <CartDialog lines={lines} total={totalPrice} onClose={closeCart} onChange={updateCart} onClear={clearCart} onSubmit={sendOrder} pending={pending !== null} sending={sending} retrySeconds={retrySeconds} orderError={orderError} receipt={receipt} returnFocus={lastTriggerRef} />}
+      <footer className="guest-footer guest-container"><span>MenuGo</span><p>Меню и отправка заказа · Оплата пока недоступна</p></footer>
     </div>
   );
 }

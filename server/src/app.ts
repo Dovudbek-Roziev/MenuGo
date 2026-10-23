@@ -9,7 +9,7 @@ import { createPublicOrdersRouter } from "./routes/publicOrders.js";
 export function createApp(config: ServerConfig) {
   const app = express();
   app.disable("x-powered-by");
-  app.use(cors({ origin: config.frontendUrl }));
+  app.use(cors({ origin: config.frontendUrl, exposedHeaders: ["Retry-After"] }));
   app.use(express.json({ limit: "16kb" }));
 
   app.get("/api/health", (_request, response) => {

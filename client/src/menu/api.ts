@@ -1,6 +1,6 @@
 import { MenuRequestError, type GuestMenuData } from "./types";
 
-const apiBase = (import.meta.env.VITE_API_URL || "http://127.0.0.1:4000").replace(/\/+$/, "");
+export const apiBase = (import.meta.env.VITE_API_URL || "http://127.0.0.1:4000").replace(/\/+$/, "");
 
 export async function fetchGuestMenu(cafeSlug: string, tableCode: string, signal: AbortSignal): Promise<GuestMenuData> {
   let response: Response;

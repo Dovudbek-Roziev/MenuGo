@@ -17,9 +17,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseBody(value: unknown): { requestId: string; items: RequestedItem[] } | null {
-  if (!isRecord(value) || Object.keys(value).sort().join() !== "items,requestId" ||
+function parseBody(value: unknown): { requestId: string; items: RequestedItem[]; expectedTotalSom: number } | null {
+  if (!isRecord(value) || Object.keys(value).sort().join() !== "expectedTotalSom,items,requestId" ||
       typeof value.requestId !== "string" || !uuidPattern.test(value.requestId) ||
+      typeof value.expectedTotalSom !== "number" || !Number.isSafeInteger(value.expectedTotalSom) || value.expectedTotalSom < 0 ||
       !Array.isArray(value.items) || value.items.length < 1 || value.items.length > 50) return null;
   const seen = new Set<string>();
   const items: RequestedItem[] = [];
@@ -34,7 +35,7 @@ function parseBody(value: unknown): { requestId: string; items: RequestedItem[] 
     items.push({ dishId, quantity: valueItem.quantity });
   }
   items.sort((a, b) => a.dishId.localeCompare(b.dishId));
-  return { requestId: value.requestId.toLowerCase(), items };
+  return { requestId: value.requestId.toLowerCase(), items, expectedTotalSom: value.expectedTotalSom };
 }
 
 function sameItems(order: InstanceType<typeof Order>, requested: RequestedItem[]): boolean {
@@ -68,7 +69,7 @@ export function createPublicOrdersRouter(config: ServerConfig) {
     response.set("Cache-Control", "no-store");
     const parsed = parseBody(request.body);
     if (!parsed) {
-      response.status(400).json({ message: "Некорректное тело заказа: проверьте requestId, блюда и количество." });
+      response.status(400).json({ message: "Некорректное тело заказа: проверьте requestId, блюда, количество и ожидаемую сумму." });
       return;
     }
     if (getDatabaseStatus(config.mongoUri) !== "connected") {
@@ -125,6 +126,14 @@ export function createPublicOrdersRouter(config: ServerConfig) {
         totalSom += lineTotalSom;
         items.push({ dishId: dish._id, name: dish.name, priceSom: dish.priceSom,
           quantity: requested.quantity, lineTotalSom });
+      }
+
+      if (totalSom !== parsed.expectedTotalSom) {
+        response.status(409).json({
+          code: "PRICE_CHANGED",
+          message: "Сумма меню изменилась. Обновите меню и подтвердите заказ заново.",
+        });
+        return;
       }
 
       await Order.init();
