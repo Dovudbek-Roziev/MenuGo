@@ -19,7 +19,7 @@ interface Props {
 
 const format = new Intl.NumberFormat("ru-RU");
 
-const errorCopy: Record<OrderErrorKind | "storage", string> = {
+export const orderErrorCopy: Record<OrderErrorKind | "storage", string> = {
   bad_request: "Заказ не прошёл проверку. Проверьте состав корзины и попробуйте снова.",
   not_found: "Кафе или стол не найдены. Проверьте QR-код и адрес меню.",
   price_changed: "Цены изменились. Проверьте обновлённую сумму и отправьте заказ заново.",
@@ -49,7 +49,7 @@ export default function CartDialog({ lines, total, onClose, onChange, onClear, o
       const first = focusable[0];
       const last = focusable.at(-1);
       if (!first || !last) return;
-      if (!dialogRef.current?.contains(document.activeElement)) {
+      if (!dialogRef.current?.contains(document.activeElement) || !focusable.includes(document.activeElement as HTMLElement)) {
         event.preventDefault();
         (event.shiftKey ? last : first).focus();
         return;
@@ -93,7 +93,7 @@ export default function CartDialog({ lines, total, onClose, onChange, onClear, o
         <div className="cart-bottom">
           {!receipt && <>
             {lines.length > 0 && <><div className="cart-total"><span>Итого</span><strong>{format.format(total)} сом</strong></div><button type="button" className="cart-clear" disabled={pending || sending} onClick={() => { closeRef.current?.focus(); onClear(); }}>Очистить корзину</button></>}
-            {orderError && <p className="cart-order-message" role="alert">{errorCopy[orderError]}{retrySeconds > 0 && ` Повтор через ${retrySeconds} с.`}</p>}
+            {orderError && <p className="cart-order-message" role="alert">{orderErrorCopy[orderError]}{retrySeconds > 0 && ` Повтор через ${retrySeconds} с.`}</p>}
             {pending && !orderError && <p className="cart-order-message" role="status">{sending ? "Отправляем заказ. Не меняйте корзину." : "Результат предыдущей отправки неизвестен. Повторите тот же запрос, чтобы проверить заказ."}</p>}
             {lines.length > 0 && <button type="button" className="cart-submit" aria-disabled={sending || retrySeconds > 0} onClick={() => { if (!sending && retrySeconds === 0) onSubmit(); }}>{sending ? "Отправляем…" : pending ? "Повторить отправку" : "Отправить заказ"}</button>}
             {pending && lines.length === 0 && <button type="button" className="cart-submit" aria-disabled={sending || retrySeconds > 0} onClick={() => { if (!sending && retrySeconds === 0) onSubmit(); }}>Повторить отправку</button>}

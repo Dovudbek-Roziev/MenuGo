@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchGuestMenu } from "./api";
 import { cartLines, cartStorageKey, changeQuantity, readCart, reconcileCart, writeCart, type CartItem } from "./cart";
-import CartDialog from "./CartDialog";
+import CartDialog, { orderErrorCopy } from "./CartDialog";
 import { clearPending, pendingStorageKey, readPending, savePending, submitOrder, OrderRequestError, type OrderErrorKind, type OrderReceipt, type PendingOrder } from "./orders";
 import { MenuRequestError, type GuestMenuData, type MenuErrorKind } from "./types";
 import "./guest-menu.css";
@@ -104,9 +104,10 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
   const retrySeconds = retryAt ? Math.max(0, Math.ceil((retryAt - now) / 1000)) : 0;
 
   async function sendOrder() {
-    if (sendingRef.current || view.status !== "ready") return;
+    if (sendingRef.current) return;
     let current = readPending(pendingKey) ?? pending;
     if (!current) {
+      if (view.status !== "ready") return;
       if (!lines.length || lines.length > 50 || totalPrice > BigInt(Number.MAX_SAFE_INTEGER)) {
         setOrderError("bad_request"); return;
       }
@@ -193,6 +194,30 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
             <p className="guest-kicker">MENUGO</p>
             <h1>Меню кафе</h1>
           </div>
+        )}
+
+        {pending && !receipt && (!cartOpen || !data) && (
+          <section className="guest-order-state" aria-labelledby="pending-order-title">
+            <p className="guest-kicker">ОТПРАВКА ЗАКАЗА</p>
+            <h2 id="pending-order-title">{sending ? "Проверяем заказ" : "Результат отправки неизвестен"}</h2>
+            <p>Запрос для этого стола сохранён. Повторная отправка проверит тот же заказ и не создаст дубликат.</p>
+            <p>Блюд: {pending.items.length} · Сумма при отправке: {price.format(pending.expectedTotalSom)} сом</p>
+            {orderError && <p className="guest-order-error" role="alert">{orderErrorCopy[orderError]}{retrySeconds > 0 && ` Повтор через ${retrySeconds} с.`}</p>}
+            <button className="guest-retry" type="button" aria-disabled={sending || retrySeconds > 0} onClick={() => { if (!sending && retrySeconds === 0) void sendOrder(); }}>
+              {sending ? "Отправляем…" : "Повторить отправку"}
+            </button>
+          </section>
+        )}
+        {receipt && (!cartOpen || !data) && (
+          <section className="guest-order-state" role="status" aria-labelledby="sent-order-title">
+            <p className="guest-kicker">ПОДТВЕРЖДЕНИЕ</p>
+            <h2 id="sent-order-title">Заказ отправлен</h2>
+            <p>Номер заказа: <strong>{receipt.id}</strong></p>
+            <p>{receipt.table.name}</p>
+            <ul>{receipt.items.map((item) => <li key={item.dishId}>{item.name} · {item.quantity} × {price.format(item.priceSom)} сом — {price.format(item.lineTotalSom)} сом</li>)}</ul>
+            <p><strong>Итого: {price.format(receipt.totalSom)} сом</strong></p>
+            <p>Заказ сохранён со статусом «Новый». Подтверждение сотрудника пока не получено.</p>
+          </section>
         )}
 
         {view.status === "loading" && (

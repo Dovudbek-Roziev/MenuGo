@@ -32,6 +32,13 @@
 .guest-state { min-height: 300px; margin-top: 50px; padding: 45px; border: 1px solid var(--line); border-radius: 14px; background: #fffcf4; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
 .guest-state h2 { font-size: clamp(25px, 4vw, 36px); letter-spacing: -.04em; }
 .guest-state p { color: var(--muted); font-size: 14px; line-height: 1.65; margin-top: 10px; max-width: 460px; }
+.guest-order-state { margin-top: 32px; padding: clamp(24px, 4vw, 36px); border: 1px solid #b4c58b; border-radius: 14px; background: #edf2dd; }
+.guest-order-state .guest-kicker { margin-bottom: 12px; }
+.guest-order-state h2 { font-size: clamp(23px, 3vw, 32px); letter-spacing: -.04em; }
+.guest-order-state p, .guest-order-state li { margin-top: 10px; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.guest-order-state ul { margin: 16px 0; padding-left: 20px; }
+.guest-order-state .guest-order-error { padding: 12px 14px; border-radius: 8px; background: #fffcf4; }
+.guest-order-state .guest-retry[aria-disabled="true"] { opacity: .65; cursor: wait; }
 .guest-state-line { width: 44px; height: 5px; border-radius: 4px; background: var(--lime); margin-bottom: 27px; }
 .guest-loader { width: 28px; height: 28px; border: 3px solid #d8e5bf; border-top-color: var(--green); border-radius: 50%; margin-bottom: 25px; animation: guest-spin .8s linear infinite; }
 .guest-retry { margin-top: 28px; padding: 14px 20px; border: 0; border-radius: 8px; background: var(--lime); color: var(--green); font: 800 13px Manrope, sans-serif; cursor: pointer; display: inline-flex; align-items: center; gap: 25px; }
