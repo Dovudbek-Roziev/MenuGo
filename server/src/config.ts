@@ -2,6 +2,8 @@ export interface ServerConfig {
   port: number;
   mongoUri: string | undefined;
   frontendUrl: string;
+  sessionSecret?: string;
+  secureCookies?: boolean;
 }
 
 export function readConfig(): ServerConfig {
@@ -30,5 +32,7 @@ export function readConfig(): ServerConfig {
     port,
     mongoUri: process.env.MONGO_URI?.trim() || undefined,
     frontendUrl,
+    sessionSecret: process.env.SESSION_SECRET || undefined,
+    secureCookies: process.env.NODE_ENV === "production",
   };
 }

@@ -1,10 +1,11 @@
-import { createApp } from "./app.js";
+import { closeAppSessionStore, createApp } from "./app.js";
 import { readConfig } from "./config.js";
 import { connectDatabase, disconnectDatabase } from "./database.js";
 
 function startServer(): void {
   const config = readConfig();
-  const server = createApp(config).listen(config.port, "127.0.0.1", () => {
+  const app = createApp(config);
+  const server = app.listen(config.port, "127.0.0.1", () => {
     console.info(`Сервер MenuGo запущен: http://127.0.0.1:${config.port}`);
     void connectDatabase(config.mongoUri);
   });
@@ -23,7 +24,7 @@ function startServer(): void {
     timeout.unref();
 
     server.close(() => {
-      void disconnectDatabase().then(
+      void closeAppSessionStore(app).then(() => disconnectDatabase()).then(
         () => { clearTimeout(timeout); },
         () => {
           console.error("Не удалось корректно закрыть соединение с MongoDB.");
