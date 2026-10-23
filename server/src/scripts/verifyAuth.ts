@@ -81,6 +81,34 @@ async function main(): Promise<void> {
 
   try {
     verificationStage = "cookie и CSRF";
+    const sessionsCollection = mongoose.connection.db!.collection("sessions");
+    await sessionsCollection.drop().catch(() => undefined);
+    // A conflicting non-TTL index deterministically rejects TTL index setup.
+    await sessionsCollection.createIndex({ expires: 1 }, { name: "expires_1" });
+    const unhandledRejections: unknown[] = [];
+    const recordUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+    process.on("unhandledRejection", recordUnhandledRejection);
+    try {
+      const failedInit = await Promise.all([
+        call(http.base, "/api/auth/me"),
+        call(http.base, "/api/auth/csrf"),
+      ]);
+      assert.deepEqual(failedInit.map((reply) => reply.status), [503, 503]);
+      assert.equal((await call(http.base, "/api/health")).status, 200);
+      assert.equal((await call(http.base, `/api/public/cafes/${cafeA.slug}/tables/${table.qrCode}/menu`)).status, 200);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(unhandledRejections.length, 0);
+
+      await sessionsCollection.dropIndex("expires_1");
+      const recovered = await call(http.base, "/api/auth/csrf");
+      assert.equal(recovered.status, 200);
+      assert.ok(recovered.cookie.startsWith("menugo.sid="));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(unhandledRejections.length, 0);
+    } finally {
+      process.removeListener("unhandledRejection", recordUnhandledRejection);
+    }
+
     const csrf = await call(http.base, "/api/auth/csrf");
     assert.equal(csrf.status, 200);
     assert.ok(csrf.cookie.startsWith("menugo.sid="));
