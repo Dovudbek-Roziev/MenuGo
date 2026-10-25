@@ -1083,6 +1083,9 @@ h1 > span {
     font-size: 10px;
     gap: 15px;
   }
+  .header nav a:nth-child(2) {
+    display: none;
+  }
   .header-status {
     display: none;
   }

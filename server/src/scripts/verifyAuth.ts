@@ -125,8 +125,12 @@ async function main(): Promise<void> {
 
     verificationStage = "вход и смена сессии";
     const loginBody = { email: ownerEmail.toUpperCase(), password, role: "staff", cafeId: cafeB.id };
-    assert.equal((await call(http.base, "/api/auth/login", { method: "POST", cookie: csrf.cookie, csrf: "wrong", body: loginBody })).status, 403);
-    assert.equal((await call(http.base, "/api/auth/login", { method: "POST", cookie: csrf.cookie, csrf: firstToken, origin: "http://evil.invalid", body: loginBody })).status, 403);
+    const invalidCsrf = await call(http.base, "/api/auth/login", { method: "POST", cookie: csrf.cookie, csrf: "wrong", body: loginBody });
+    assert.equal(invalidCsrf.status, 403);
+    assert.equal(invalidCsrf.body.code, "CSRF_INVALID");
+    const forbiddenOrigin = await call(http.base, "/api/auth/login", { method: "POST", cookie: csrf.cookie, csrf: firstToken, origin: "http://evil.invalid", body: loginBody });
+    assert.equal(forbiddenOrigin.status, 403);
+    assert.equal(forbiddenOrigin.body.code, "ORIGIN_FORBIDDEN");
     assert.equal((await call(http.base, "/api/auth/login", { method: "POST", cookie: csrf.cookie, csrf: firstToken, origin: null, body: loginBody })).status, 403);
     const wrongPassword = await call(http.base, "/api/auth/login", { method: "POST", cookie: csrf.cookie, csrf: firstToken, body: { email: ownerEmail, password: `${password}x` } });
     const wrongEmail = await call(http.base, "/api/auth/login", { method: "POST", cookie: csrf.cookie, csrf: firstToken, body: { email: `missing-${suffix}@example.invalid`, password } });

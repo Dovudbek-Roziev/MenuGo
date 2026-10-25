@@ -12,6 +12,7 @@ import "@fontsource/manrope/latin-700.css";
 import "@fontsource/manrope/latin-800.css";
 import Router from "./Router";
 import "./styles.css";
+import "./auth/auth.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

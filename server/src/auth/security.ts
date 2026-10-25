@@ -9,7 +9,7 @@ export function newCsrfToken(): string {
 export function requireOrigin(config: ServerConfig): RequestHandler {
   return (request, response, next) => {
     if (request.get("Origin") !== config.frontendUrl) {
-      response.status(403).json({ message: "Источник запроса не разрешён." });
+      response.status(403).json({ code: "ORIGIN_FORBIDDEN", message: "Источник запроса не разрешён." });
       return;
     }
     next();
@@ -20,7 +20,7 @@ export function rejectForeignOrigin(config: ServerConfig): RequestHandler {
   return (request, response, next) => {
     const origin = request.get("Origin");
     if (origin && origin !== config.frontendUrl) {
-      response.status(403).json({ message: "Источник запроса не разрешён." });
+      response.status(403).json({ code: "ORIGIN_FORBIDDEN", message: "Источник запроса не разрешён." });
       return;
     }
     next();
@@ -34,7 +34,7 @@ export const requireCsrf: RequestHandler = (request, response, next) => {
   const storedBytes = Buffer.from(stored ?? "");
   if (!sent || !stored || sentBytes.length !== storedBytes.length ||
       !timingSafeEqual(sentBytes, storedBytes)) {
-    response.status(403).json({ message: "Недействительный CSRF-токен." });
+    response.status(403).json({ code: "CSRF_INVALID", message: "Недействительный CSRF-токен." });
     return;
   }
   next();

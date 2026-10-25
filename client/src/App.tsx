@@ -219,6 +219,7 @@ export default function App() {
           <nav aria-label="Основная навигация">
             <a href="#how-it-works">Как это работает</a>
             <a href="#for-cafe">Для кафе</a>
+            <a href="/login">Кабинет</a>
           </nav>
           <a className="header-status" href="#launch">
             <span aria-hidden="true" />
