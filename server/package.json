@@ -12,6 +12,7 @@
     "seed": "node --env-file-if-exists=.env --import tsx src/scripts/seedDemo.ts",
     "create:user": "node --env-file-if-exists=.env --import tsx src/scripts/createUser.ts",
     "verify:auth": "node --env-file-if-exists=.env --import tsx src/scripts/verifyAuth.ts",
+    "verify:manage-menu": "node --env-file-if-exists=.env --import tsx src/scripts/verifyManageMenu.ts",
     "verify:orders": "node --env-file-if-exists=.env --import tsx src/scripts/verifyOrders.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc"

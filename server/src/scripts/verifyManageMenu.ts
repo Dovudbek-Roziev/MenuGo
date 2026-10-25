@@ -1,0 +1,221 @@
+﻿import assert from "node:assert/strict";
+import argon2 from "argon2";
+import { randomBytes, randomUUID } from "node:crypto";
+import mongoose from "mongoose";
+import { closeAppSessionStore, createApp } from "../app.js";
+import { readConfig } from "../config.js";
+import { Cafe } from "../models/Cafe.js";
+import { Category } from "../models/Category.js";
+import { Dish } from "../models/Dish.js";
+import { Order } from "../models/Order.js";
+import { CafeTable } from "../models/Table.js";
+import { User } from "../models/User.js";
+
+type Reply = { status: number; body: Record<string, any>; cookie: string; headers: Headers };
+let stage = "подготовка";
+
+async function main() {
+  const baseConfig = readConfig();
+  if (!baseConfig.mongoUri) throw new Error("Для проверки нужен локальный MONGO_URI.");
+  const config = { ...baseConfig, frontendUrl: "http://127.0.0.1:5173",
+    sessionSecret: randomBytes(48).toString("base64url"), secureCookies: false };
+  await mongoose.connect(baseConfig.mongoUri, { dbName: "menugo_stage91_verification", serverSelectionTimeoutMS: 5000 });
+  await Promise.all([Cafe.init(), Category.init(), Dish.init(), Order.init(), CafeTable.init(), User.init()]);
+
+  const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+  const password = randomBytes(24).toString("base64url");
+  const passwordHash = await argon2.hash(password, { type: argon2.argon2id });
+  const cafeA = await Cafe.create({ name: `Menu test ${suffix}`, slug: `manage-${suffix}-a`, isActive: true });
+  const cafeB = await Cafe.create({ name: `Foreign test ${suffix}`, slug: `manage-${suffix}-b`, isActive: true });
+  await User.create({ name: "Owner test", email: `owner-${suffix}@example.invalid`, passwordHash, cafeId: cafeA._id, role: "owner", isActive: true });
+  await User.create({ name: "Staff test", email: `staff-${suffix}@example.invalid`, passwordHash, cafeId: cafeA._id, role: "staff", isActive: true });
+  const foreignCategory = await Category.create({ cafeId: cafeB._id, name: "Foreign category", isActive: true });
+  const foreignDish = await Dish.create({ cafeId: cafeB._id, categoryId: foreignCategory._id, name: "Foreign dish", priceSom: 900, isAvailable: true });
+  const category = await Category.create({ cafeId: cafeA._id, name: "Drinks", sortOrder: 2, isActive: true });
+  const dish = await Dish.create({ cafeId: cafeA._id, categoryId: category._id, name: "Tea", description: "Hot tea", priceSom: 100, isAvailable: true });
+  const table = await CafeTable.create({ cafeId: cafeA._id, name: "Table test", qrCode: `manage-table-${suffix}`, isActive: true });
+
+  const app = createApp(config);
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}`;
+
+  async function call(path: string, options: { method?: string; cookie?: string; csrf?: string; origin?: string; body?: unknown } = {}): Promise<Reply> {
+    const headers: Record<string, string> = { Origin: options.origin ?? config.frontendUrl };
+    if (options.cookie) headers.Cookie = options.cookie;
+    if (options.csrf) headers["X-CSRF-Token"] = options.csrf;
+    if (options.body !== undefined) headers["Content-Type"] = "application/json";
+    const result = await fetch(`${base}${path}`, { method: options.method ?? "GET", headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body) });
+    return { status: result.status, body: await result.json() as Record<string, any>,
+      cookie: result.headers.get("Set-Cookie")?.split(";")[0] ?? options.cookie ?? "", headers: result.headers };
+  }
+
+  async function login(email: string): Promise<{ cookie: string; csrf: string }> {
+    const initial = await call("/api/auth/csrf");
+    console.info(`Проверка входа: CSRF ${initial.status}.`);
+    assert.equal(initial.status, 200);
+    const result = await call("/api/auth/login", { method: "POST", cookie: initial.cookie,
+      csrf: initial.body.csrfToken, body: { email, password } });
+    assert.equal(result.status, 200);
+    console.info(`Проверка входа: login ${result.status}.`);
+    return { cookie: result.cookie, csrf: result.body.csrfToken };
+  }
+
+  const ownerSession = await login(`owner-${suffix}@example.invalid`);
+  const staffSession = await login(`staff-${suffix}@example.invalid`);
+  const managePath = "/api/manage/menu";
+  const publicMenuPath = `/api/public/cafes/${cafeA.slug}/tables/${table.qrCode}/menu`;
+  const orderPath = `/api/public/cafes/${cafeA.slug}/tables/${table.qrCode}/orders`;
+
+  try {
+    stage = "владелец и список меню";
+    console.info(`Этап: ${stage}.`);
+    assert.equal((await call(managePath)).status, 401);
+    const listing = await call(managePath, { cookie: ownerSession.cookie });
+    assert.equal(listing.status, 200);
+    assert.equal(listing.body.categories.some((item: any) => item.id === category.id), true);
+    assert.equal(listing.body.categories.find((item: any) => item.id === category.id).dishes[0].id, dish.id);
+    assert.equal("cafeId" in listing.body.categories[0], false);
+    assert.equal((await call(managePath, { cookie: staffSession.cookie })).status, 403);
+    assert.equal((await call(`${managePath}/dishes/${foreignDish.id}`, { method: "PATCH", ...ownerSession,
+      body: { name: "Attempted foreign edit" } })).status, 404);
+
+    stage = "CSRF и Origin";
+    console.info(`Этап: ${stage}.`);
+    assert.equal((await call(`${managePath}/categories`, { method: "POST", cookie: ownerSession.cookie,
+      csrf: "wrong-token", body: { name: "No write" } })).status, 403);
+    const csrfDenied = await call(`${managePath}/categories`, { method: "POST", cookie: ownerSession.cookie,
+      body: { name: "No write" }, origin: "https://invalid.example" });
+    assert.equal(csrfDenied.status, 403);
+    assert.equal(csrfDenied.body.code, "ORIGIN_FORBIDDEN");
+
+    stage = "категории";
+    console.info(`Этап: ${stage}.`);
+    const newCategory = await call(`${managePath}/categories`, { method: "POST", ...ownerSession,
+      body: { name: "  Desserts  ", sortOrder: 4 } });
+    assert.equal(newCategory.status, 201);
+    const createdCategoryId = newCategory.body.category.id as string;
+    assert.equal(newCategory.body.category.name, "Desserts");
+    assert.equal((await call(`${managePath}/categories`, { method: "POST", ...ownerSession,
+      body: { name: "Desserts" } })).status, 409);
+    assert.equal((await call(`${managePath}/categories`, { method: "POST", ...ownerSession,
+      body: { name: "   " } })).status, 400);
+    assert.equal((await call(`${managePath}/categories`, { method: "POST", ...ownerSession,
+      body: { name: "Bad field", cafeId: cafeB.id } })).status, 400);
+    assert.equal((await call(`${managePath}/categories/${createdCategoryId}`, { method: "PATCH", ...ownerSession, body: {} })).status, 400);
+    assert.equal((await call(`${managePath}/categories/not-an-id`, { method: "PATCH", ...ownerSession, body: { name: "X" } })).status, 400);
+    const categoryEdit = await call(`${managePath}/categories/${createdCategoryId}`, { method: "PATCH", ...ownerSession,
+      body: { name: "Sweets", sortOrder: 3 } });
+    assert.equal(categoryEdit.status, 200);
+    assert.equal(categoryEdit.body.category.name, "Sweets");
+    assert.equal((await call(`${managePath}/categories/${createdCategoryId}`, { method: "PATCH", ...ownerSession,
+      body: { isActive: false } })).body.category.isActive, false);
+    const inactiveListing = await call(managePath, { cookie: ownerSession.cookie });
+    assert.equal(inactiveListing.body.categories.find((item: any) => item.id === createdCategoryId).isActive, false);
+    assert.equal((await call(`${managePath}/categories/${createdCategoryId}`, { method: "PATCH", ...ownerSession,
+      body: { isActive: true } })).body.category.isActive, true);
+    assert.equal((await call(`${managePath}/categories/${createdCategoryId}`, { method: "PATCH", ...ownerSession,
+      body: { name: "Drinks" } })).status, 409);
+
+    stage = "блюда и разделение кафе";
+    console.info("Этап: блюда и изоляция кафе.");
+    const newDish = await call(`${managePath}/dishes`, { method: "POST", ...ownerSession,
+      body: { categoryId: createdCategoryId, name: "Cake", description: "Sweet", priceSom: 250, sortOrder: 1 } });
+    assert.equal(newDish.status, 201);
+    const createdDishId = newDish.body.dish.id as string;
+    const secondDish = await call(`${managePath}/dishes`, { method: "POST", ...ownerSession,
+      body: { categoryId: createdCategoryId, name: "Pie", priceSom: 150 } });
+    assert.equal(secondDish.status, 201);
+    assert.equal((await call(`${managePath}/dishes`, { method: "POST", ...ownerSession,
+      body: { categoryId: createdCategoryId, name: "Cake", priceSom: 200 } })).status, 409);
+    assert.equal((await call(`${managePath}/dishes`, { method: "POST", ...ownerSession,
+      body: { categoryId: foreignCategory.id, name: "Foreign category item", priceSom: 5 } })).status, 404);
+    assert.equal((await call(`${managePath}/dishes`, { method: "POST", ...ownerSession,
+      body: { categoryId: createdCategoryId, name: "Negative", priceSom: -1 } })).status, 400);
+    assert.equal((await call(`${managePath}/dishes`, { method: "POST", ...ownerSession,
+      body: { categoryId: createdCategoryId, name: "Fraction", priceSom: 1.5 } })).status, 400);
+    assert.equal((await call(`${managePath}/dishes/${createdDishId}`, { method: "PATCH", ...ownerSession,
+      body: { categoryId: foreignCategory.id } })).status, 404);
+    const afterForeignPatch = await Dish.findById(createdDishId);
+    assert.equal(afterForeignPatch?.categoryId.toString(), createdCategoryId);
+    assert.equal((await call(`${managePath}/dishes/${dish.id}`, { method: "PATCH", ...ownerSession,
+      body: { name: "Foreign rename", cafeId: cafeB.id } })).status, 400);
+    const dishEdit = await call(`${managePath}/dishes/${createdDishId}`, { method: "PATCH", ...ownerSession,
+      body: { name: "Cake slice", description: "Updated", priceSom: 275, sortOrder: 7 } });
+    assert.equal(dishEdit.status, 200);
+    assert.equal(dishEdit.body.dish.priceSom, 275);
+    assert.equal((await call(`${managePath}/dishes/${createdDishId}`, { method: "PATCH", ...ownerSession,
+      body: { isAvailable: false } })).body.dish.isAvailable, false);
+    const unavailableListing = await call(managePath, { cookie: ownerSession.cookie });
+    const listedCake = unavailableListing.body.categories.flatMap((item: any) => item.dishes).find((item: any) => item.id === createdDishId);
+    assert.equal(listedCake.isAvailable, false);
+    assert.equal((await call(`${managePath}/dishes/${createdDishId}`, { method: "PATCH", ...ownerSession,
+      body: { isAvailable: true } })).body.dish.isAvailable, true);
+    assert.equal((await call(`${managePath}/dishes/${createdDishId}`, { method: "PATCH", ...ownerSession,
+      body: { name: "Pie" } })).status, 409);
+    assert.equal((await call(`${managePath}/dishes/${foreignCategory.id}`, { method: "PATCH", ...ownerSession,
+      body: { name: "Hidden" } })).status, 404);
+
+    stage = "снимок заказа и публичное меню";
+    console.info(`Этап: ${stage}.`);
+    const orderReply = await call(orderPath, { method: "POST", body: {
+      requestId: randomUUID(), items: [{ dishId: dish.id, quantity: 2 }], expectedTotalSom: 200,
+    } });
+    assert.equal(orderReply.status, 201);
+    const orderId = orderReply.body.id as string;
+    const savedTotal = orderReply.body.totalSom as number;
+    const priceEdit = await call(`${managePath}/dishes/${dish.id}`, { method: "PATCH", ...ownerSession,
+      body: { priceSom: 180 } });
+    assert.equal(priceEdit.status, 200);
+    const storedOrder = await Order.findById(orderId).lean();
+    assert.equal(storedOrder?.totalSom, savedTotal);
+    assert.equal(storedOrder?.items[0]?.priceSom, 100);
+    assert.equal(storedOrder?.items[0]?.lineTotalSom, 200);
+
+    const hiddenDish = await call(`${managePath}/dishes/${dish.id}`, { method: "PATCH", ...ownerSession,
+      body: { isAvailable: false } });
+    assert.equal(hiddenDish.status, 200);
+    let menu = await call(publicMenuPath);
+    assert.equal(menu.status, 200);
+    assert.equal(menu.body.categories.flatMap((item: any) => item.dishes).some((item: any) => item.id === dish.id), false);
+    const unavailableOrder = await call(orderPath, { method: "POST", body: {
+      requestId: randomUUID(), items: [{ dishId: dish.id, quantity: 1 }], expectedTotalSom: 180,
+    } });
+    assert.equal(unavailableOrder.status, 409);
+    await call(`${managePath}/categories/${category.id}`, { method: "PATCH", ...ownerSession,
+      body: { isActive: false } });
+    menu = await call(publicMenuPath);
+    assert.equal(menu.body.categories.some((item: any) => item.id === category.id), false);
+    assert.equal((await call(`${managePath}/categories/${category.id}`, { method: "PATCH", ...ownerSession,
+      body: { isActive: true } })).status, 200);
+
+    stage = "база не подключена";
+    console.info(`Этап: ${stage}.`);
+    const noDbApp = createApp({ ...config, mongoUri: undefined });
+    const noDbServer = noDbApp.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => noDbServer.once("listening", resolve));
+    const noDbAddress = noDbServer.address();
+    assert.ok(noDbAddress && typeof noDbAddress !== "string");
+    const unavailable = await fetch(`http://127.0.0.1:${noDbAddress.port}/api/manage/menu`);
+    assert.equal(unavailable.status, 503);
+    await new Promise<void>((resolve) => noDbServer.close(() => resolve()));
+    await closeAppSessionStore(noDbApp);
+
+    console.info("Проверены: owner, список/создание/изменение/активность категорий и блюд, CSRF/Origin, валидация и дубликаты, изоляция кафе, публичное меню и неизменность снимка заказа после смены цены.");
+    console.info("Тестовые записи добавлены только в menugo_stage91_verification; существующие данные не изменялись и не удалялись.");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeAppSessionStore(app);
+    await mongoose.disconnect();
+  }
+}
+
+try { await main(); }
+catch {
+  console.error(`Проверка управления меню не прошла (${stage}). Подробности подключения скрыты.`);
+  process.exitCode = 1;
+} finally { await mongoose.disconnect(); }
+
