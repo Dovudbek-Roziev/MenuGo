@@ -51,6 +51,18 @@ export async function refreshCsrf(): Promise<void> {
   csrfToken = token;
 }
 
+export async function getSessionCsrfToken(): Promise<string> {
+  if (!csrfToken) await refreshCsrf();
+  return csrfToken!;
+}
+
+export function expireSession(): void {
+  generation += 1;
+  checkPromise = undefined;
+  csrfToken = undefined;
+  publish({ status: "unauthenticated" });
+}
+
 export async function signIn(email: string, password: string): Promise<void> {
   // Invalidate any earlier /me request without changing the route's auth state.
   // Keeping the current state prevents Router from unmounting LoginPage while

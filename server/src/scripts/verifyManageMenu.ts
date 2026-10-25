@@ -175,10 +175,19 @@ async function main() {
     assert.equal(storedOrder?.items[0]?.priceSom, 100);
     assert.equal(storedOrder?.items[0]?.lineTotalSom, 200);
 
+    let menu = await call(publicMenuPath);
+    assert.equal(menu.status, 200);
+    const publicTea = menu.body.categories.flatMap((item: any) => item.dishes).find((item: any) => item.id === dish.id);
+    assert.equal(publicTea.priceSom, 180);
+    const publicCake = menu.body.categories.find((item: any) => item.id === createdCategoryId)?.dishes
+      .find((item: any) => item.id === createdDishId);
+    assert.equal(publicCake.name, "Cake slice");
+    assert.equal(publicCake.priceSom, 275);
+
     const hiddenDish = await call(`${managePath}/dishes/${dish.id}`, { method: "PATCH", ...ownerSession,
       body: { isAvailable: false } });
     assert.equal(hiddenDish.status, 200);
-    let menu = await call(publicMenuPath);
+    menu = await call(publicMenuPath);
     assert.equal(menu.status, 200);
     assert.equal(menu.body.categories.flatMap((item: any) => item.dishes).some((item: any) => item.id === dish.id), false);
     const unavailableOrder = await call(orderPath, { method: "POST", body: {

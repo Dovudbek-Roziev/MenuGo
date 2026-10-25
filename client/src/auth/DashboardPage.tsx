@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AuthApiError } from "./api";
 import { signOut, type AuthState } from "./state";
+import MenuManager from "./MenuManager";
 
 interface DashboardPageProps { state: Extract<AuthState, { status: "authenticated" }>; navigate: (path: string, replace?: boolean) => void }
 
@@ -49,13 +50,15 @@ export default function DashboardPage({ state, navigate }: DashboardPageProps) {
           </div>
           <span className="role-badge">{identity.user.role === "owner" ? "Владелец" : "Сотрудник"}</span>
         </div>
-        <div className="dashboard-placeholder">
-          <span className="placeholder-icon" aria-hidden="true">✳</span>
-          <div>
-            <h2>Рабочее пространство готовится</h2>
-            <p>Управление меню и панель заказов появятся в следующих версиях MenuGo.</p>
+        {identity.user.role === "owner" ? <MenuManager /> : (
+          <div className="dashboard-placeholder">
+            <span className="placeholder-icon" aria-hidden="true">✳</span>
+            <div>
+              <h2>Рабочее пространство готовится</h2>
+              <p>Панель заказов появится в следующих версиях MenuGo.</p>
+            </div>
           </div>
-        </div>
+        )}
         {error && <p className="dashboard-error" role="alert">{error}</p>}
       </section>
       <footer className="dashboard-footer"><span>MenuGo</span><span>Цифровое меню для гостеприимного сервиса</span></footer>
