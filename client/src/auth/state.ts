@@ -52,8 +52,10 @@ export async function refreshCsrf(): Promise<void> {
 }
 
 export async function signIn(email: string, password: string): Promise<void> {
+  // Invalidate any earlier /me request without changing the route's auth state.
+  // Keeping the current state prevents Router from unmounting LoginPage while
+  // its form request is pending, preserving the entered email and local state.
   const requestGeneration = ++generation;
-  publish({ status: "checking" });
   try {
     csrfToken = await fetchCsrfToken();
     const result = await loginRequest(email, password, csrfToken);
