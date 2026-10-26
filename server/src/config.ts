@@ -4,6 +4,9 @@ export interface ServerConfig {
   frontendUrl: string;
   sessionSecret?: string;
   secureCookies?: boolean;
+  cloudinaryCloudName?: string;
+  cloudinaryApiKey?: string;
+  cloudinaryApiSecret?: string;
 }
 
 export function readConfig(): ServerConfig {
@@ -34,5 +37,8 @@ export function readConfig(): ServerConfig {
     frontendUrl,
     sessionSecret: process.env.SESSION_SECRET || undefined,
     secureCookies: process.env.NODE_ENV === "production",
+    cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME?.trim() || undefined,
+    cloudinaryApiKey: process.env.CLOUDINARY_API_KEY?.trim() || undefined,
+    cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET || undefined,
   };
 }

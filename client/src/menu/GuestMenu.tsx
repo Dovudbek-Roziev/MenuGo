@@ -265,6 +265,7 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
                     <div className="guest-dishes">
                       {category.dishes.map((dish) => (
                         <article className="guest-dish" key={dish.id}>
+                          {dish.imageUrl && <img className="guest-dish-image" src={dish.imageUrl} alt={dish.name} loading="lazy" />}
                           <div><h3>{dish.name}</h3>{dish.description && <p>{dish.description}</p>}</div>
                           <div className="guest-dish-actions"><strong>{price.format(dish.priceSom)} сом</strong>{cart.find((item) => item.id === dish.id) ? (
                             <div className="cart-stepper"><button type="button" onClick={() => updateCart(dish.id, -1)} disabled={locked} aria-label={`Уменьшить количество: ${dish.name}`}>−</button><span>{cart.find((item) => item.id === dish.id)?.quantity}</span><button type="button" onClick={() => updateCart(dish.id, 1)} disabled={locked || cart.find((item) => item.id === dish.id)?.quantity === 99} aria-label={`Увеличить количество: ${dish.name}`}>+</button></div>

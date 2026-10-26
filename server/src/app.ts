@@ -8,6 +8,7 @@ import { createPublicOrdersRouter } from "./routes/publicOrders.js";
 import { createAuthRouter } from "./auth/routes.js";
 import { createManageMenuRouter } from "./routes/manageMenu.js";
 import { createSessionManager, type SessionManager } from "./auth/sessions.js";
+import type { DishImageStorage } from "./services/dishImages.js";
 
 const sessionManagers = new WeakMap<Express, SessionManager>();
 
@@ -16,7 +17,7 @@ export async function closeAppSessionStore(app: Express): Promise<void> {
   sessionManagers.delete(app);
 }
 
-export function createApp(config: ServerConfig) {
+export function createApp(config: ServerConfig, imageStorage?: DishImageStorage) {
   const app = express();
   app.disable("x-powered-by");
   if (config.secureCookies) app.set("trust proxy", 1);
@@ -37,7 +38,7 @@ export function createApp(config: ServerConfig) {
   app.use("/api/public", createPublicMenuRouter(config));
   app.use("/api/public", createPublicOrdersRouter(config));
   app.use("/api/auth", sessionManager.middleware, createAuthRouter(config));
-  app.use("/api/manage", sessionManager.middleware, createManageMenuRouter(config));
+  app.use("/api/manage", sessionManager.middleware, createManageMenuRouter(config, imageStorage));
 
   app.use(notFound);
   app.use(errorHandler);

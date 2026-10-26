@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { AuthApiError } from "./api";
 import {
-  createCategory, createDish, fetchManagedMenu, ManageApiError, type ManagedCategory, type ManagedDish,
+  createCategory, createDish, fetchManagedMenu, ManageApiError, removeDishImage, uploadDishImage, type ManagedCategory, type ManagedDish,
   updateCategory, updateDish,
 } from "./manageApi";
 import { refreshCsrf } from "./state";
@@ -35,9 +35,10 @@ interface CategoryCardProps {
   onCreateDish: (input: Omit<ManagedDish, "id">) => Promise<boolean>;
   onSaveDish: (id: string, input: Omit<ManagedDish, "id">) => Promise<void>;
   onToggleDish: (dish: ManagedDish) => Promise<void>;
+  onImageChange: (id: string, file?: File) => Promise<void>;
 }
 
-function CategoryCard({ category, busy, onSaveCategory, onToggleCategory, onCreateDish, onSaveDish, onToggleDish }: CategoryCardProps) {
+function CategoryCard({ category, busy, onSaveCategory, onToggleCategory, onCreateDish, onSaveDish, onToggleDish, onImageChange }: CategoryCardProps) {
   const [name, setName] = useState(category.name);
   const [sortOrder, setSortOrder] = useState(String(category.sortOrder));
   const [newName, setNewName] = useState("");
@@ -78,7 +79,7 @@ function CategoryCard({ category, busy, onSaveCategory, onToggleCategory, onCrea
       <div className="manage-dish-list">
         {category.dishes.length === 0 ? <p className="manage-empty-inline">В этой категории пока нет блюд.</p> : null}
         {category.dishes.map((dish) => (
-          <DishRow key={dish.id} dish={dish} busy={busy} onSaveDish={onSaveDish} onToggleDish={onToggleDish} />
+          <DishRow key={dish.id} dish={dish} busy={busy} onSaveDish={onSaveDish} onToggleDish={onToggleDish} onImageChange={onImageChange} />
         ))}
       </div>
 
@@ -102,16 +103,19 @@ function CategoryCard({ category, busy, onSaveCategory, onToggleCategory, onCrea
   );
 }
 
-function DishRow({ dish, busy, onSaveDish, onToggleDish }: {
+function DishRow({ dish, busy, onSaveDish, onToggleDish, onImageChange }: {
   dish: ManagedDish;
   busy: string | null;
   onSaveDish: (id: string, input: Omit<ManagedDish, "id">) => Promise<void>;
   onToggleDish: (dish: ManagedDish) => Promise<void>;
+  onImageChange: (id: string, file?: File) => Promise<void>;
 }) {
   const [name, setName] = useState(dish.name);
   const [description, setDescription] = useState(dish.description);
   const [priceSom, setPriceSom] = useState(String(dish.priceSom));
   const [sortOrder, setSortOrder] = useState(String(dish.sortOrder));
+  const imageInput = useRef<HTMLInputElement>(null);
+  const [imageError, setImageError] = useState("");
 
   useEffect(() => {
     setName(dish.name);
@@ -131,6 +135,32 @@ function DishRow({ dish, busy, onSaveDish, onToggleDish }: {
           {dish.description ? <p>{dish.description}</p> : null}
         </div>
         <div className="manage-dish-price">{som.format(dish.priceSom)} <span>сом</span></div>
+      </div>
+      <div className="manage-image-control">
+        {dish.imageUrl && <img className="manage-image-preview" src={dish.imageUrl} alt={`Фото блюда «${dish.name}»`} />}
+        <div className="manage-image-actions">
+          <input ref={imageInput} className="manage-image-input" type="file" accept="image/jpeg,image/png,image/webp"
+            aria-label={`Выбрать фото блюда «${dish.name}»`} disabled={busy !== null}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+                setImageError("Выберите изображение JPEG, PNG или WebP."); event.target.value = ""; return;
+              }
+              if (file.size > 5 * 1024 * 1024) {
+                setImageError("Размер изображения не должен превышать 5 МБ."); event.target.value = ""; return;
+              }
+              setImageError("");
+              void onImageChange(dish.id, file).then(() => { event.target.value = ""; });
+            }} />
+          <button type="button" className="manage-secondary-button" disabled={busy !== null}
+            onClick={() => imageInput.current?.click()}>
+            {busy === `image:${dish.id}` ? "Загружаем фото…" : dish.imageUrl ? "Заменить фото" : "Добавить фото"}
+          </button>
+          {dish.imageUrl && <button type="button" className="manage-secondary-button" disabled={busy !== null}
+            onClick={() => { setImageError(""); void onImageChange(dish.id); }}>Убрать фото</button>}
+        </div>
+        {imageError && <p className="manage-image-error" role="alert">{imageError}</p>}
       </div>
       <div className="manage-dish-actions">
         <button type="button" className="manage-secondary-button" disabled={busy !== null}
@@ -249,6 +279,28 @@ export default function MenuManager() {
       (updated) => applyDish(updated), dish.isAvailable ? "Блюдо скрыто из гостевого меню." : "Блюдо снова доступно гостям.");
   }
 
+  async function changeImage(id: string, file?: File) {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(`image:${id}`);
+    setMessage(null);
+    try {
+      const result = file ? await uploadDishImage(id, file) : await removeDishImage(id);
+      setCategories((current) => current.map((category) => ({
+        ...category,
+        dishes: category.dishes.map((dish) => dish.id === id
+          ? { ...dish, imageUrl: result.imageUrl ?? undefined }
+          : dish),
+      })));
+      setMessage({ kind: result.cleanupPending ? "info" : "success", text: result.message ?? (file ? "Фото блюда сохранено." : "Фото блюда удалено.") });
+    } catch (error) {
+      setMessage({ kind: "error", text: manageMessage(error) });
+    } finally {
+      setBusy(null);
+      lock.current = false;
+    }
+  }
+
   return (
     <section className="manage-menu" aria-labelledby="manage-menu-title">
       <div className="manage-heading-row">
@@ -289,7 +341,7 @@ export default function MenuManager() {
         <div className="manage-category-list">
           {categories.map((category) => <CategoryCard key={category.id} category={category} busy={busy}
             onSaveCategory={editCategory} onToggleCategory={toggleCategory} onCreateDish={addDish}
-            onSaveDish={editDish} onToggleDish={toggleDish} />)}
+            onSaveDish={editDish} onToggleDish={toggleDish} onImageChange={changeImage} />)}
         </div>
       )}
     </section>

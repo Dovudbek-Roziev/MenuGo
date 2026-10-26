@@ -54,10 +54,10 @@ export function createPublicMenuRouter(config: ServerConfig) {
         isAvailable: true,
       })
         .sort({ sortOrder: 1, _id: 1 })
-        .select("categoryId name description priceSom")
+        .select("categoryId name description priceSom imageUrl")
         .lean();
 
-      const dishesByCategory = new Map<string, Array<{ id: string; name: string; description: string; priceSom: number }>>();
+      const dishesByCategory = new Map<string, Array<{ id: string; name: string; description: string; priceSom: number; imageUrl?: string }>>();
       for (const dish of dishes) {
         const key = dish.categoryId.toString();
         const categoryDishes = dishesByCategory.get(key) ?? [];
@@ -66,6 +66,7 @@ export function createPublicMenuRouter(config: ServerConfig) {
           name: dish.name,
           description: dish.description,
           priceSom: dish.priceSom,
+          ...(dish.imageUrl ? { imageUrl: dish.imageUrl } : {}),
         });
         dishesByCategory.set(key, categoryDishes);
       }

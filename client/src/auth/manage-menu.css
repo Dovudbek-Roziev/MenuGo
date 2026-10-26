@@ -156,6 +156,11 @@
 .manage-dish-copy p { margin-top: 5px; color: #727a70; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .manage-dish-price { flex: 0 0 auto; color: #103f33; font-size: 17px; font-weight: 850; white-space: nowrap; }
 .manage-dish-price span { color: #6d796e; font-size: 11px; font-weight: 700; }
+.manage-image-control { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+.manage-image-preview { display: block; width: 112px; height: 78px; border: 1px solid #e1e4d6; border-radius: 9px; object-fit: cover; background: #edf0e5; }
+.manage-image-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.manage-image-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
+.manage-image-error { margin-top: 7px; color: #873e2d; font-size: 11px; }
 .manage-dish-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 17px; margin-top: 12px; }
 .manage-dish-actions .manage-disclosure { margin-top: 0; }
 .manage-dish-form { padding: 0 0 8px; }
@@ -179,6 +184,9 @@
   .manage-dish-price { font-size: 15px; }
   .manage-dish-actions { align-items: flex-start; flex-direction: column; }
   .manage-dish-actions > .manage-secondary-button { width: 100%; }
+  .manage-image-control { align-items: flex-start; flex-direction: column; }
+  .manage-image-actions { width: 100%; }
+  .manage-image-actions .manage-secondary-button { flex: 1 1 120px; }
   .manage-message { align-items: flex-start; flex-direction: column; }
 }
 

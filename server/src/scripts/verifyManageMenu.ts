@@ -10,6 +10,7 @@ import { Dish } from "../models/Dish.js";
 import { Order } from "../models/Order.js";
 import { CafeTable } from "../models/Table.js";
 import { User } from "../models/User.js";
+import { ImageStorageProviderError, type DishImageStorage } from "../services/dishImages.js";
 
 type Reply = { status: number; body: Record<string, any>; cookie: string; headers: Headers };
 let stage = "подготовка";
@@ -35,20 +36,36 @@ async function main() {
   const dish = await Dish.create({ cafeId: cafeA._id, categoryId: category._id, name: "Tea", description: "Hot tea", priceSom: 100, isAvailable: true });
   const table = await CafeTable.create({ cafeId: cafeA._id, name: "Table test", qrCode: `manage-table-${suffix}`, isActive: true });
 
-  const app = createApp(config);
+  let imageCounter = 0;
+  let failImageUpload = false;
+  let failImageRemove = false;
+  const removedImages: string[] = [];
+  const imageStorage: DishImageStorage = {
+    async upload(_buffer, format) {
+      if (failImageUpload) throw new ImageStorageProviderError();
+      imageCounter += 1;
+      return { publicId: `verification/${suffix}/${imageCounter}`, imageUrl: `https://res.cloudinary.com/mock/image/upload/${imageCounter}.${format}` };
+    },
+    async remove(publicId) {
+      removedImages.push(publicId);
+      if (failImageRemove) throw new ImageStorageProviderError();
+    },
+  };
+
+  const app = createApp(config, imageStorage);
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}`;
 
-  async function call(path: string, options: { method?: string; cookie?: string; csrf?: string; origin?: string; body?: unknown } = {}): Promise<Reply> {
+  async function call(path: string, options: { method?: string; cookie?: string; csrf?: string; origin?: string; body?: unknown; form?: FormData } = {}): Promise<Reply> {
     const headers: Record<string, string> = { Origin: options.origin ?? config.frontendUrl };
     if (options.cookie) headers.Cookie = options.cookie;
     if (options.csrf) headers["X-CSRF-Token"] = options.csrf;
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
     const result = await fetch(`${base}${path}`, { method: options.method ?? "GET", headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body) });
+      body: options.form ?? (options.body === undefined ? undefined : JSON.stringify(options.body)) });
     return { status: result.status, body: await result.json() as Record<string, any>,
       cookie: result.headers.get("Set-Cookie")?.split(";")[0] ?? options.cookie ?? "", headers: result.headers };
   }
@@ -159,6 +176,95 @@ async function main() {
     assert.equal((await call(`${managePath}/dishes/${foreignCategory.id}`, { method: "PATCH", ...ownerSession,
       body: { name: "Hidden" } })).status, 404);
 
+    stage = "загрузка и управление фотографиями блюд";
+    console.info(`Этап: ${stage}.`);
+    const imagePath = (id: string) => `${managePath}/dishes/${id}/image`;
+    const makeImageForm = (type = "image/png", bytes?: Uint8Array) => {
+      const form = new FormData();
+      form.append("image", new Blob([bytes ?? new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82])], { type }), "dish.png");
+      return form;
+    };
+    assert.equal((await call(imagePath(dish.id), { method: "POST", ...staffSession, form: makeImageForm() })).status, 403);
+    assert.equal((await call(imagePath(foreignDish.id), { method: "POST", ...ownerSession, form: makeImageForm() })).status, 404);
+    assert.equal((await call(imagePath(dish.id), { method: "POST", cookie: ownerSession.cookie,
+      origin: "https://invalid.example", csrf: ownerSession.csrf, form: makeImageForm() })).status, 403);
+    assert.equal((await call(imagePath(dish.id), { method: "POST", cookie: ownerSession.cookie,
+      form: makeImageForm() })).status, 403);
+    const invalidImage = await call(imagePath(dish.id), { method: "POST", ...ownerSession,
+      form: makeImageForm("image/jpeg", new TextEncoder().encode("not an image")) });
+    assert.equal(invalidImage.status, 400);
+    const tooLarge = await call(imagePath(dish.id), { method: "POST", ...ownerSession,
+      form: makeImageForm("image/jpeg", new Uint8Array(5 * 1024 * 1024 + 1)) });
+    assert.equal(tooLarge.status, 413);
+    const directUrl = await call(imagePath(dish.id), { method: "POST", ...ownerSession,
+      body: { url: "https://images.example.invalid/dish.jpg" } });
+    assert.equal(directUrl.status, 400);
+
+    const firstImage = await call(imagePath(dish.id), { method: "POST", ...ownerSession, form: makeImageForm() });
+    assert.equal(firstImage.status, 200);
+    assert.match(firstImage.body.imageUrl, /^https:\/\/res\.cloudinary\.com\//);
+    let savedDish = await Dish.findById(dish.id).select("+imagePublicId");
+    assert.equal(savedDish?.imagePublicId, `verification/${suffix}/1`);
+    const imageListing = await call(managePath, { cookie: ownerSession.cookie });
+    const managedImageDish = imageListing.body.categories.flatMap((item: any) => item.dishes).find((item: any) => item.id === dish.id);
+    assert.equal(managedImageDish.imageUrl, firstImage.body.imageUrl);
+    assert.equal("imagePublicId" in managedImageDish, false);
+    const publicImageMenu = await call(publicMenuPath);
+    const publicImageDish = publicImageMenu.body.categories.flatMap((item: any) => item.dishes).find((item: any) => item.id === dish.id);
+    assert.equal(publicImageDish.imageUrl, firstImage.body.imageUrl);
+
+    const replacement = await call(imagePath(dish.id), { method: "POST", ...ownerSession, form: makeImageForm() });
+    assert.equal(replacement.status, 200);
+    assert.equal(replacement.body.imageUrl.endsWith("/2.png"), true);
+    assert.equal(removedImages.includes(`verification/${suffix}/1`), true);
+
+    failImageUpload = true;
+    const providerFailure = await call(imagePath(dish.id), { method: "POST", ...ownerSession, form: makeImageForm() });
+    failImageUpload = false;
+    assert.equal(providerFailure.status, 502);
+    savedDish = await Dish.findById(dish.id).select("+imagePublicId");
+    assert.equal(savedDish?.imagePublicId, `verification/${suffix}/2`);
+
+    const originalDishSave = Dish.prototype.save;
+    const failPublicId = dish.id;
+    (Dish.prototype as any).save = function (...args: any[]) {
+      if (this._id.toString() === failPublicId && this.imagePublicId === `verification/${suffix}/3`) {
+        return Promise.reject(new Error("mock database write failure"));
+      }
+      return originalDishSave.apply(this, args);
+    };
+    const dbFailure = await call(imagePath(dish.id), { method: "POST", ...ownerSession, form: makeImageForm() });
+    (Dish.prototype as any).save = originalDishSave;
+    assert.equal(dbFailure.status, 500);
+    assert.equal(removedImages.includes(`verification/${suffix}/3`), true);
+    savedDish = await Dish.findById(dish.id).select("+imagePublicId");
+    assert.equal(savedDish?.imagePublicId, `verification/${suffix}/2`);
+
+    failImageRemove = true;
+    const removeWithCleanupPending = await call(imagePath(dish.id), { method: "DELETE", ...ownerSession });
+    failImageRemove = false;
+    assert.equal(removeWithCleanupPending.status, 200);
+    assert.equal(removeWithCleanupPending.body.cleanupPending, true);
+    savedDish = await Dish.findById(dish.id).select("+imagePublicId");
+    assert.equal(savedDish?.imagePublicId, undefined);
+    assert.equal(savedDish?.imageUrl, undefined);
+    const removeAgain = await call(imagePath(dish.id), { method: "DELETE", ...ownerSession });
+    assert.equal(removeAgain.status, 200);
+    assert.equal(removeAgain.body.cleanupPending, false);
+
+    const noCloudinaryApp = createApp({ ...config, cloudinaryCloudName: undefined, cloudinaryApiKey: undefined, cloudinaryApiSecret: undefined });
+    const noCloudinaryServer = noCloudinaryApp.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => noCloudinaryServer.once("listening", resolve));
+    const noCloudinaryAddress = noCloudinaryServer.address();
+    assert.ok(noCloudinaryAddress && typeof noCloudinaryAddress !== "string");
+    const unconfiguredForm = makeImageForm();
+    const unconfiguredUpload = await fetch(`http://127.0.0.1:${noCloudinaryAddress.port}${imagePath(dish.id)}`, {
+      method: "POST", headers: { Origin: config.frontendUrl, Cookie: ownerSession.cookie, "X-CSRF-Token": ownerSession.csrf }, body: unconfiguredForm,
+    });
+    assert.equal(unconfiguredUpload.status, 503);
+    await new Promise<void>((resolve) => noCloudinaryServer.close(() => resolve()));
+    await closeAppSessionStore(noCloudinaryApp);
+
     stage = "снимок заказа и публичное меню";
     console.info(`Этап: ${stage}.`);
     const orderReply = await call(orderPath, { method: "POST", body: {
@@ -213,7 +319,7 @@ async function main() {
     await new Promise<void>((resolve) => noDbServer.close(() => resolve()));
     await closeAppSessionStore(noDbApp);
 
-    console.info("Проверены: owner, список/создание/изменение/активность категорий и блюд, CSRF/Origin, валидация и дубликаты, изоляция кафе, публичное меню и неизменность снимка заказа после смены цены.");
+    console.info("Проверены: управление категориями и блюдами, CSRF/Origin, изоляция кафе, публичное меню и неизменность снимка заказа; загрузка/замена/удаление изображений, права owner/staff, формат/размер файла, ошибки хранилища/БД и очистка.");
     console.info("Тестовые записи добавлены только в menugo_stage91_verification; существующие данные не изменялись и не удалялись.");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -223,8 +329,9 @@ async function main() {
 }
 
 try { await main(); }
-catch {
+catch (error) {
   console.error(`Проверка управления меню не прошла (${stage}). Подробности подключения скрыты.`);
+  if (error instanceof assert.AssertionError) console.error(error.message);
   process.exitCode = 1;
 } finally { await mongoose.disconnect(); }
 

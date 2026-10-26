@@ -9,6 +9,7 @@ export interface ManagedDish {
   priceSom: number;
   sortOrder: number;
   isAvailable: boolean;
+  imageUrl?: string;
 }
 
 export interface ManagedCategory {
@@ -38,7 +39,7 @@ function validDish(value: unknown): value is ManagedDish {
     typeof value.name === "string" && typeof value.description === "string" &&
     Number.isSafeInteger(value.priceSom) && (value.priceSom as number) >= 0 &&
     Number.isSafeInteger(value.sortOrder) && (value.sortOrder as number) >= 0 &&
-    typeof value.isAvailable === "boolean";
+    typeof value.isAvailable === "boolean" && (value.imageUrl === undefined || typeof value.imageUrl === "string");
 }
 
 function validCategory(value: unknown): value is ManagedCategory {
@@ -130,4 +131,40 @@ export async function updateDish(id: string, input: Partial<Omit<ManagedDish, "i
   const data = await request<{ dish?: unknown }>(`/menu/dishes/${encodeURIComponent(id)}`, "PATCH", input);
   if (!validDish(data.dish)) throw new ManageApiError(503, "UNAVAILABLE", "Сервер вернул некорректное блюдо.");
   return data.dish;
+}
+
+export interface DishImageResult { imageUrl: string | null; cleanupPending: boolean; message?: string }
+
+async function dishImageRequest(id: string, method: "POST" | "DELETE", file?: File): Promise<DishImageResult> {
+  const headers: Record<string, string> = { Accept: "application/json", "X-CSRF-Token": await getSessionCsrfToken() };
+  const body = new FormData();
+  if (file) body.append("image", file);
+  let response: Response;
+  try {
+    response = await fetch(`${apiBase}/api/manage/menu/dishes/${encodeURIComponent(id)}/image`, {
+      method, credentials: "include", headers, ...(file ? { body } : {}),
+    });
+  } catch {
+    throw new ManageApiError(0, "NETWORK", "Не удалось связаться с сервером. Проверьте подключение и повторите попытку.");
+  }
+  let data: unknown;
+  try { data = await response.json(); } catch { data = undefined; }
+  if (!response.ok) {
+    const error = classify(response, data);
+    if (error.status === 401) expireSession();
+    throw error;
+  }
+  if (!isRecord(data) || !(data.imageUrl === null || typeof data.imageUrl === "string") || typeof data.cleanupPending !== "boolean") {
+    throw new ManageApiError(503, "UNAVAILABLE", "Сервер вернул некорректный ответ об изображении.");
+  }
+  return { imageUrl: data.imageUrl, cleanupPending: data.cleanupPending,
+    ...(typeof data.message === "string" ? { message: data.message } : {}) };
+}
+
+export function uploadDishImage(id: string, file: File): Promise<DishImageResult> {
+  return dishImageRequest(id, "POST", file);
+}
+
+export function removeDishImage(id: string): Promise<DishImageResult> {
+  return dishImageRequest(id, "DELETE");
 }

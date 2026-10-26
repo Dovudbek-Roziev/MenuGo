@@ -1,4 +1,6 @@
 import { Router } from "express";
+import multer from "multer";
+import { fileTypeFromBuffer } from "file-type";
 import { Types } from "mongoose";
 import type { ServerConfig } from "../config.js";
 import { requireAuth, requireRole } from "../auth/permissions.js";
@@ -6,6 +8,7 @@ import { requireCsrf, requireOrigin } from "../auth/security.js";
 import { getDatabaseStatus } from "../database.js";
 import { Category } from "../models/Category.js";
 import { Dish } from "../models/Dish.js";
+import { createDishImageStorage, ImageStorageProviderError, ImageStorageUnavailableError, type DishImageStorage } from "../services/dishImages.js";
 
 type RecordValue = Record<string, unknown>;
 const objectIdPattern = /^[0-9a-f]{24}$/i;
@@ -71,12 +74,33 @@ function categoryJson(category: { _id: Types.ObjectId; name: string; sortOrder: 
   return { id: category._id.toString(), name: category.name, sortOrder: category.sortOrder, isActive: category.isActive };
 }
 
-function dishJson(dish: { _id: Types.ObjectId; categoryId: Types.ObjectId; name: string; description: string; priceSom: number; sortOrder: number; isAvailable: boolean }) {
+function dishJson(dish: { _id: Types.ObjectId; categoryId: Types.ObjectId; name: string; description: string; priceSom: number; sortOrder: number; isAvailable: boolean; imageUrl?: string | null }) {
   return { id: dish._id.toString(), categoryId: dish.categoryId.toString(), name: dish.name,
-    description: dish.description, priceSom: dish.priceSom, sortOrder: dish.sortOrder, isAvailable: dish.isAvailable };
+    description: dish.description, priceSom: dish.priceSom, sortOrder: dish.sortOrder, isAvailable: dish.isAvailable,
+    ...(dish.imageUrl ? { imageUrl: dish.imageUrl } : {}) };
 }
 
-export function createManageMenuRouter(config: ServerConfig) {
+const imageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 0 } });
+
+function parseImageFormat(mime: string): "jpg" | "png" | "webp" | undefined {
+  if (mime === "image/jpeg") return "jpg";
+  if (mime === "image/png") return "png";
+  if (mime === "image/webp") return "webp";
+  return undefined;
+}
+
+function imageUploadMiddleware(request: import("express").Request, response: import("express").Response, next: import("express").NextFunction) {
+  imageUpload.single("image")(request, response, (error: unknown) => {
+    if (!error) { next(); return; }
+    if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+      response.status(413).json({ message: "Размер изображения не должен превышать 5 МБ." });
+      return;
+    }
+    response.status(400).json({ message: "Загрузите один файл изображения в формате JPEG, PNG или WebP." });
+  });
+}
+
+export function createManageMenuRouter(config: ServerConfig, imageStorage: DishImageStorage = createDishImageStorage(config)) {
   const router = Router();
   router.use(requireAuth, requireRole("owner"));
 
@@ -88,7 +112,7 @@ export function createManageMenuRouter(config: ServerConfig) {
       const [categories, dishes] = await Promise.all([
         Category.find({ cafeId }).sort({ sortOrder: 1, _id: 1 }).select("_id name sortOrder isActive").lean(),
         Dish.find({ cafeId }).sort({ sortOrder: 1, _id: 1 })
-          .select("_id categoryId name description priceSom sortOrder isAvailable").lean(),
+          .select("_id categoryId name description priceSom sortOrder isAvailable imageUrl").lean(),
       ]);
       const byCategory = new Map<string, ReturnType<typeof dishJson>[]>();
       for (const dish of dishes) {
@@ -201,6 +225,85 @@ export function createManageMenuRouter(config: ServerConfig) {
       await dish.save();
       response.json({ dish: dishJson(dish) });
     } catch (error) { sendWriteError(response, error, "Не удалось изменить блюдо меню."); }
+  });
+
+  router.post("/menu/dishes/:dishId/image", requireOrigin(config), requireCsrf, imageUploadMiddleware, async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    if (!databaseReady(response, config)) return;
+    const dishId = request.params.dishId;
+    if (typeof dishId !== "string" || !objectIdPattern.test(dishId) || !request.file) {
+      response.status(400).json({ message: "Выберите изображение JPEG, PNG или WebP размером до 5 МБ." });
+      return;
+    }
+    const claimedFormat = parseImageFormat(request.file.mimetype);
+    const detected = await fileTypeFromBuffer(request.file.buffer).catch(() => undefined);
+    const actualFormat = detected?.mime === "image/jpeg" ? "jpg" : detected?.mime === "image/png" ? "png" : detected?.mime === "image/webp" ? "webp" : undefined;
+    if (!claimedFormat || !actualFormat || claimedFormat !== actualFormat) {
+      response.status(400).json({ message: "Файл не является допустимым изображением JPEG, PNG или WebP." });
+      return;
+    }
+
+    let uploaded: Awaited<ReturnType<DishImageStorage["upload"]>> | undefined;
+    let oldPublicId: string | undefined;
+    try {
+      const dish = await Dish.findOne({ _id: dishId, cafeId: request.auth!.cafe.id }).select("+imagePublicId");
+      if (!dish) { response.status(404).json({ message: "Блюдо в этом кафе не найдено." }); return; }
+      oldPublicId = dish.imagePublicId ?? undefined;
+      uploaded = await imageStorage.upload(request.file.buffer, actualFormat);
+      dish.imagePublicId = uploaded.publicId;
+      dish.imageUrl = uploaded.imageUrl;
+      await dish.save();
+    } catch (error) {
+      if (uploaded) {
+        try { await imageStorage.remove(uploaded.publicId); }
+        catch { console.error("Не удалось очистить временно загруженное изображение."); }
+      }
+      if (error instanceof ImageStorageUnavailableError) {
+        response.status(503).json({ message: "Загрузка изображений не настроена на сервере." });
+      } else if (error instanceof ImageStorageProviderError) {
+        response.status(502).json({ message: "Не удалось загрузить изображение в хранилище. Попробуйте позже." });
+      } else {
+        sendWriteError(response, error, "Не удалось сохранить изображение блюда.");
+      }
+      return;
+    }
+
+    let cleanupPending = false;
+    if (oldPublicId && oldPublicId !== uploaded!.publicId) {
+      try { await imageStorage.remove(oldPublicId); }
+      catch { cleanupPending = true; console.error("Не удалось удалить предыдущую копию изображения."); }
+    }
+    response.json({ imageUrl: uploaded!.imageUrl, cleanupPending,
+      ...(cleanupPending ? { message: "Новое изображение сохранено. Предыдущая копия пока не удалена." } : {}) });
+  });
+
+  router.delete("/menu/dishes/:dishId/image", requireOrigin(config), requireCsrf, async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    if (!databaseReady(response, config)) return;
+    const dishId = request.params.dishId;
+    if (typeof dishId !== "string" || !objectIdPattern.test(dishId)) {
+      response.status(400).json({ message: "Некорректный идентификатор блюда." });
+      return;
+    }
+    try {
+      const dish = await Dish.findOne({ _id: dishId, cafeId: request.auth!.cafe.id }).select("+imagePublicId");
+      if (!dish) { response.status(404).json({ message: "Блюдо в этом кафе не найдено." }); return; }
+      const oldPublicId = dish.imagePublicId;
+      dish.imagePublicId = undefined;
+      dish.imageUrl = undefined;
+      await dish.save();
+      let cleanupPending = false;
+      if (oldPublicId) {
+        try { await imageStorage.remove(oldPublicId); }
+        catch { cleanupPending = true; console.error("Не удалось удалить изображение из хранилища после снятия с меню."); }
+      }
+      response.json({ imageUrl: null, cleanupPending,
+        message: cleanupPending ? "Изображение удалено из меню. Удаление файла из хранилища ожидает повтора." : "Изображение удалено." });
+    } catch (error) {
+      if (error instanceof ImageStorageUnavailableError || error instanceof ImageStorageProviderError) {
+        response.status(502).json({ message: "Не удалось удалить изображение из хранилища." });
+      } else sendWriteError(response, error, "Не удалось удалить изображение блюда.");
+    }
   });
 
   return router;

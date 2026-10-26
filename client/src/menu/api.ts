@@ -34,7 +34,8 @@ function isGuestMenuData(value: unknown): value is GuestMenuData {
       typeof category.id === "string" && category.id.length > 0 && typeof category.name === "string" &&
       Array.isArray(category.dishes) && category.dishes.every((dish) =>
         typeof dish.id === "string" && dish.id.length > 0 && typeof dish.name === "string" &&
-        typeof dish.description === "string" && Number.isSafeInteger(dish.priceSom) && dish.priceSom >= 0,
+        typeof dish.description === "string" && Number.isSafeInteger(dish.priceSom) && dish.priceSom >= 0 &&
+        (dish.imageUrl === undefined || typeof dish.imageUrl === "string"),
       ),
     );
 }
