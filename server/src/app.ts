@@ -7,6 +7,7 @@ import { createPublicMenuRouter } from "./routes/publicMenu.js";
 import { createPublicOrdersRouter } from "./routes/publicOrders.js";
 import { createAuthRouter } from "./auth/routes.js";
 import { createManageMenuRouter } from "./routes/manageMenu.js";
+import { createManageOrdersRouter } from "./routes/manageOrders.js";
 import { createSessionManager, type SessionManager } from "./auth/sessions.js";
 import type { DishImageStorage } from "./services/dishImages.js";
 
@@ -38,7 +39,7 @@ export function createApp(config: ServerConfig, imageStorage?: DishImageStorage)
   app.use("/api/public", createPublicMenuRouter(config));
   app.use("/api/public", createPublicOrdersRouter(config));
   app.use("/api/auth", sessionManager.middleware, createAuthRouter(config));
-  app.use("/api/manage", sessionManager.middleware, createManageMenuRouter(config, imageStorage));
+  app.use("/api/manage", sessionManager.middleware, createManageOrdersRouter(config), createManageMenuRouter(config, imageStorage));
 
   app.use(notFound);
   app.use(errorHandler);

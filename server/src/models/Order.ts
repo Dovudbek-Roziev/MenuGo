@@ -1,6 +1,8 @@
 import { model, Schema } from "mongoose";
 
 const safeSom = (value: number) => Number.isSafeInteger(value) && value >= 0;
+export const orderStatuses = ["new", "preparing", "ready", "completed", "cancelled"] as const;
+export type OrderStatus = typeof orderStatuses[number];
 
 const orderItemSchema = new Schema({
   dishId: { type: Schema.Types.ObjectId, ref: "Dish", required: true },
@@ -17,10 +19,12 @@ const orderSchema = new Schema({
   items: { type: [orderItemSchema], required: true, validate: (items: unknown[]) => items.length >= 1 && items.length <= 50 },
   totalSom: { type: Number, required: true, validate: safeSom },
   currency: { type: String, required: true, enum: ["KGS"], default: "KGS" },
-  status: { type: String, required: true, enum: ["new"], default: "new" },
+  status: { type: String, required: true, enum: orderStatuses, default: "new" },
   requestId: { type: String, required: true, match: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/ },
 }, { timestamps: true });
 
 orderSchema.index({ cafeId: 1, tableId: 1, requestId: 1 }, { unique: true });
+orderSchema.index({ cafeId: 1, createdAt: -1, _id: -1 });
+orderSchema.index({ cafeId: 1, status: 1, createdAt: -1, _id: -1 });
 
 export const Order = model("Order", orderSchema);
