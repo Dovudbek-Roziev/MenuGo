@@ -3,7 +3,7 @@ import { AuthApiError, fetchCsrfToken, fetchMe, loginRequest, logoutRequest, typ
 export type AuthState =
   | { status: "checking" }
   | { status: "unauthenticated" }
-  | { status: "authenticated"; identity: AuthIdentity }
+  | { status: "authenticated"; identity: AuthIdentity; recheckError?: string }
   | { status: "unavailable"; message: string };
 
 let state: AuthState = { status: "checking" };
@@ -28,7 +28,8 @@ export function checkSession(force = false): Promise<void> {
   if (checkPromise) return checkPromise;
   if (!force && state.status !== "checking") return Promise.resolve();
   const requestGeneration = ++generation;
-  publish({ status: "checking" });
+  const backgroundRecheck = state.status === "authenticated";
+  if (!backgroundRecheck) publish({ status: "checking" });
   const pending = fetchMe().then((identity) => {
     if (generation === requestGeneration) publish({ status: "authenticated", identity });
   }).catch((error: unknown) => {
@@ -37,7 +38,11 @@ export function checkSession(force = false): Promise<void> {
       csrfToken = undefined;
       publish({ status: "unauthenticated" });
     } else {
-      publish({ status: "unavailable", message: messageFor(error) });
+      if (backgroundRecheck && state.status === "authenticated") {
+        publish({ ...state, recheckError: messageFor(error) });
+      } else {
+        publish({ status: "unavailable", message: messageFor(error) });
+      }
     }
   }).finally(() => {
     if (checkPromise === pending) checkPromise = undefined;

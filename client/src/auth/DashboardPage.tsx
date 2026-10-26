@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AuthApiError } from "./api";
-import { signOut, type AuthState } from "./state";
+import { checkSession, signOut, type AuthState } from "./state";
 import MenuManager from "./MenuManager";
 
 interface DashboardPageProps { state: Extract<AuthState, { status: "authenticated" }>; navigate: (path: string, replace?: boolean) => void }
@@ -57,6 +57,12 @@ export default function DashboardPage({ state, navigate }: DashboardPageProps) {
               <h2>Рабочее пространство готовится</h2>
               <p>Панель заказов появится в следующих версиях MenuGo.</p>
             </div>
+          </div>
+        )}
+        {state.recheckError && (
+          <div className="dashboard-error" role="status">
+            <p>{state.recheckError}</p>
+            <button className="auth-text-button" type="button" onClick={() => void checkSession(true)}>Повторить проверку</button>
           </div>
         )}
         {error && <p className="dashboard-error" role="alert">{error}</p>}
