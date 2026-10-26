@@ -40,17 +40,33 @@ async function main() {
   let failImageUpload = false;
   let failImageRemove = false;
   const removedImages: string[] = [];
+  let uploadBarrier: { expected: number; started: number; ready: Promise<void>; signalReady: () => void; gate: Promise<void>; release: () => void } | undefined;
   const imageStorage: DishImageStorage = {
     async upload(_buffer, format) {
       if (failImageUpload) throw new ImageStorageProviderError();
-      imageCounter += 1;
-      return { publicId: `verification/${suffix}/${imageCounter}`, imageUrl: `https://res.cloudinary.com/mock/image/upload/${imageCounter}.${format}` };
+      const currentImage = ++imageCounter;
+      const activeBarrier = uploadBarrier;
+      if (activeBarrier) {
+        activeBarrier.started += 1;
+        if (activeBarrier.started === activeBarrier.expected) activeBarrier.signalReady();
+        await activeBarrier.gate;
+      }
+      return { publicId: `verification/${suffix}/${currentImage}`, imageUrl: `https://res.cloudinary.com/mock/image/upload/${currentImage}.${format}` };
     },
     async remove(publicId) {
       removedImages.push(publicId);
       if (failImageRemove) throw new ImageStorageProviderError();
     },
   };
+
+  function blockUploads(expected: number) {
+    let signalReady!: () => void;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { signalReady = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    uploadBarrier = { expected, started: 0, ready, signalReady, gate, release };
+    return uploadBarrier;
+  }
 
   const app = createApp(config, imageStorage);
   const server = app.listen(0, "127.0.0.1");
@@ -218,39 +234,93 @@ async function main() {
     assert.equal(replacement.body.imageUrl.endsWith("/2.png"), true);
     assert.equal(removedImages.includes(`verification/${suffix}/1`), true);
 
+    failImageRemove = true;
+    const replacementCleanupFailure = await call(imagePath(dish.id), { method: "POST", ...ownerSession, form: makeImageForm() });
+    failImageRemove = false;
+    assert.equal(replacementCleanupFailure.status, 200);
+    assert.equal(replacementCleanupFailure.body.cleanupPending, true);
+    savedDish = await Dish.findById(dish.id).select("+imagePublicId +pendingImagePublicIds");
+    assert.equal(savedDish?.imagePublicId, `verification/${suffix}/3`);
+    assert.deepEqual(savedDish?.pendingImagePublicIds, [`verification/${suffix}/2`]);
+    const removalRetriesReplacement = await call(imagePath(dish.id), { method: "DELETE", ...ownerSession });
+    assert.equal(removalRetriesReplacement.status, 200);
+    assert.equal(removalRetriesReplacement.body.cleanupPending, false);
+    assert.equal(removedImages.includes(`verification/${suffix}/2`), true);
+    assert.equal(removedImages.includes(`verification/${suffix}/3`), true);
+
     failImageUpload = true;
     const providerFailure = await call(imagePath(dish.id), { method: "POST", ...ownerSession, form: makeImageForm() });
     failImageUpload = false;
     assert.equal(providerFailure.status, 502);
     savedDish = await Dish.findById(dish.id).select("+imagePublicId");
-    assert.equal(savedDish?.imagePublicId, `verification/${suffix}/2`);
+    assert.equal(savedDish?.imagePublicId, undefined);
 
-    const originalDishSave = Dish.prototype.save;
-    const failPublicId = dish.id;
-    (Dish.prototype as any).save = function (...args: any[]) {
-      if (this._id.toString() === failPublicId && this.imagePublicId === `verification/${suffix}/3`) {
-        return Promise.reject(new Error("mock database write failure"));
+    const originalFindOneAndUpdate = Dish.findOneAndUpdate;
+    (Dish as any).findOneAndUpdate = function (...args: any[]) {
+      if (args[1]?.$set?.imagePublicId === `verification/${suffix}/4`) {
+        return { select: () => Promise.reject(new Error("mock database write failure")) };
       }
-      return originalDishSave.apply(this, args);
+      return (originalFindOneAndUpdate as any).apply(this, args);
     };
     const dbFailure = await call(imagePath(dish.id), { method: "POST", ...ownerSession, form: makeImageForm() });
-    (Dish.prototype as any).save = originalDishSave;
+    (Dish as any).findOneAndUpdate = originalFindOneAndUpdate;
     assert.equal(dbFailure.status, 500);
-    assert.equal(removedImages.includes(`verification/${suffix}/3`), true);
+    assert.equal(removedImages.includes(`verification/${suffix}/4`), true);
     savedDish = await Dish.findById(dish.id).select("+imagePublicId");
-    assert.equal(savedDish?.imagePublicId, `verification/${suffix}/2`);
+    assert.equal(savedDish?.imagePublicId, undefined);
 
+    const imageBeforeDeleteFailure = await call(imagePath(dish.id), { method: "POST", ...ownerSession, form: makeImageForm() });
+    assert.equal(imageBeforeDeleteFailure.status, 200);
     failImageRemove = true;
     const removeWithCleanupPending = await call(imagePath(dish.id), { method: "DELETE", ...ownerSession });
     failImageRemove = false;
     assert.equal(removeWithCleanupPending.status, 200);
     assert.equal(removeWithCleanupPending.body.cleanupPending, true);
-    savedDish = await Dish.findById(dish.id).select("+imagePublicId");
+    savedDish = await Dish.findById(dish.id).select("+imagePublicId +pendingImagePublicIds");
     assert.equal(savedDish?.imagePublicId, undefined);
     assert.equal(savedDish?.imageUrl, undefined);
+    assert.deepEqual(savedDish?.pendingImagePublicIds, [`verification/${suffix}/5`]);
+    const removalsBeforeRetry = removedImages.length;
     const removeAgain = await call(imagePath(dish.id), { method: "DELETE", ...ownerSession });
     assert.equal(removeAgain.status, 200);
     assert.equal(removeAgain.body.cleanupPending, false);
+    assert.equal(removedImages.slice(removalsBeforeRetry).includes(`verification/${suffix}/5`), true);
+    savedDish = await Dish.findById(dish.id).select("+pendingImagePublicIds");
+    assert.deepEqual(savedDish?.pendingImagePublicIds ?? [], []);
+
+    const parallelUploads = blockUploads(2);
+    failImageRemove = true;
+    const uploadA = call(imagePath(dish.id), { method: "POST", ...ownerSession, form: makeImageForm() });
+    const uploadB = call(imagePath(dish.id), { method: "POST", ...ownerSession, form: makeImageForm() });
+    await parallelUploads.ready;
+    parallelUploads.release();
+    uploadBarrier = undefined;
+    const [uploadReplyA, uploadReplyB] = await Promise.all([uploadA, uploadB]);
+    failImageRemove = false;
+    assert.deepEqual([uploadReplyA.status, uploadReplyB.status].sort(), [200, 409]);
+    savedDish = await Dish.findById(dish.id).select("+imagePublicId +pendingImagePublicIds");
+    assert.ok(savedDish?.imagePublicId);
+    const committedParallelId = savedDish!.imagePublicId!;
+    const losingParallelId = committedParallelId.endsWith("/6") ? `verification/${suffix}/7` : `verification/${suffix}/6`;
+    const losingReply = uploadReplyA.status === 409 ? uploadReplyA : uploadReplyB;
+    assert.equal(losingReply.body.cleanupPending, true);
+    assert.deepEqual(savedDish?.pendingImagePublicIds, [losingParallelId]);
+
+    const uploadDeleteBarrier = blockUploads(1);
+    const uploadWithDelete = call(imagePath(dish.id), { method: "POST", ...ownerSession, form: makeImageForm() });
+    await uploadDeleteBarrier.ready;
+    const concurrentDelete = await call(imagePath(dish.id), { method: "DELETE", ...ownerSession });
+    uploadDeleteBarrier.release();
+    uploadBarrier = undefined;
+    const uploadAfterDelete = await uploadWithDelete;
+    assert.equal(concurrentDelete.status, 200);
+    assert.equal(uploadAfterDelete.status, 409);
+    savedDish = await Dish.findById(dish.id).select("+imagePublicId +pendingImagePublicIds");
+    assert.equal(savedDish?.imagePublicId, undefined);
+    assert.deepEqual(savedDish?.pendingImagePublicIds ?? [], []);
+    assert.equal(removedImages.includes(committedParallelId), true);
+    assert.equal(removedImages.includes(losingParallelId), true);
+    assert.equal(removedImages.includes(`verification/${suffix}/8`), true);
 
     const noCloudinaryApp = createApp({ ...config, cloudinaryCloudName: undefined, cloudinaryApiKey: undefined, cloudinaryApiSecret: undefined });
     const noCloudinaryServer = noCloudinaryApp.listen(0, "127.0.0.1");

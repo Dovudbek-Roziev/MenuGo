@@ -100,6 +100,37 @@ function imageUploadMiddleware(request: import("express").Request, response: imp
   });
 }
 
+async function recordPendingImage(cafeId: string, dishId: string, publicId: string): Promise<boolean> {
+  const result = await Dish.updateOne({ _id: dishId, cafeId }, { $addToSet: { pendingImagePublicIds: publicId } });
+  return result.matchedCount === 1;
+}
+
+async function cleanupPendingImages(cafeId: string, dishId: string, imageStorage: DishImageStorage): Promise<boolean> {
+  const dish = await Dish.findOne({ _id: dishId, cafeId })
+    .select("+imagePublicId +pendingImagePublicIds").lean();
+  if (!dish) return false;
+  for (const publicId of dish.pendingImagePublicIds ?? []) {
+    if (publicId === dish.imagePublicId) {
+      await Dish.updateOne({ _id: dishId, cafeId }, { $pull: { pendingImagePublicIds: publicId } });
+      continue;
+    }
+    try {
+      await imageStorage.remove(publicId);
+      await Dish.updateOne({ _id: dishId, cafeId, pendingImagePublicIds: publicId }, { $pull: { pendingImagePublicIds: publicId } });
+    } catch {
+      console.error("Не удалось очистить ожидающее удаления изображение.");
+    }
+  }
+  const remaining = await Dish.exists({ _id: dishId, cafeId, pendingImagePublicIds: { $exists: true, $ne: [] } });
+  return !!remaining;
+}
+
+function imageVersionFilter(cafeId: string, dishId: string, imagePublicId?: string | null): Record<string, unknown> {
+  return imagePublicId
+    ? { _id: dishId, cafeId, imagePublicId }
+    : { _id: dishId, cafeId, $or: [{ imagePublicId: { $exists: false } }, { imagePublicId: null }] };
+}
+
 export function createManageMenuRouter(config: ServerConfig, imageStorage: DishImageStorage = createDishImageStorage(config)) {
   const router = Router();
   router.use(requireAuth, requireRole("owner"));
@@ -244,19 +275,41 @@ export function createManageMenuRouter(config: ServerConfig, imageStorage: DishI
     }
 
     let uploaded: Awaited<ReturnType<DishImageStorage["upload"]>> | undefined;
-    let oldPublicId: string | undefined;
+    let uploadCommitted = false;
+    const cafeId = request.auth!.cafe.id;
     try {
-      const dish = await Dish.findOne({ _id: dishId, cafeId: request.auth!.cafe.id }).select("+imagePublicId");
+      const dish = await Dish.findOne({ _id: dishId, cafeId }).select("+imagePublicId").lean();
       if (!dish) { response.status(404).json({ message: "Блюдо в этом кафе не найдено." }); return; }
-      oldPublicId = dish.imagePublicId ?? undefined;
       uploaded = await imageStorage.upload(request.file.buffer, actualFormat);
-      dish.imagePublicId = uploaded.publicId;
-      dish.imageUrl = uploaded.imageUrl;
-      await dish.save();
-    } catch (error) {
-      if (uploaded) {
+      const update: Record<string, unknown> = {
+        $set: { imagePublicId: uploaded.publicId, imageUrl: uploaded.imageUrl },
+      };
+      if (dish.imagePublicId) update.$addToSet = { pendingImagePublicIds: dish.imagePublicId };
+      const saved = await Dish.findOneAndUpdate(
+        imageVersionFilter(cafeId, dishId, dish.imagePublicId), update, { returnDocument: "after", runValidators: true },
+      ).select("+imagePublicId +pendingImagePublicIds");
+      if (!saved) {
+        let cleanupPending = false;
         try { await imageStorage.remove(uploaded.publicId); }
-        catch { console.error("Не удалось очистить временно загруженное изображение."); }
+        catch {
+          cleanupPending = await recordPendingImage(cafeId, dishId, uploaded.publicId);
+          console.error("Не удалось очистить параллельной загрузки оставленное изображение.");
+        }
+        response.status(409).json({ message: "Изображение блюда уже изменилось. Обновите страницу и повторите попытку.", cleanupPending });
+        return;
+      }
+      uploadCommitted = true;
+      const cleanupPending = await cleanupPendingImages(cafeId, dishId, imageStorage);
+      response.json({ imageUrl: uploaded.imageUrl, cleanupPending,
+        ...(cleanupPending ? { message: "Новое изображение сохранено. Удаление предыдущего файла будет повторено." } : {}) });
+    } catch (error) {
+      if (uploaded && !uploadCommitted) {
+        try { await imageStorage.remove(uploaded.publicId); }
+        catch {
+          try { await recordPendingImage(cafeId, dishId, uploaded.publicId); }
+          catch { console.error("Не удалось зарегистрировать ожидающую очистки загрузку."); }
+          console.error("Не удалось очистить временно загруженное изображение.");
+        }
       }
       if (error instanceof ImageStorageUnavailableError) {
         response.status(503).json({ message: "Загрузка изображений не настроена на сервере." });
@@ -267,14 +320,6 @@ export function createManageMenuRouter(config: ServerConfig, imageStorage: DishI
       }
       return;
     }
-
-    let cleanupPending = false;
-    if (oldPublicId && oldPublicId !== uploaded!.publicId) {
-      try { await imageStorage.remove(oldPublicId); }
-      catch { cleanupPending = true; console.error("Не удалось удалить предыдущую копию изображения."); }
-    }
-    response.json({ imageUrl: uploaded!.imageUrl, cleanupPending,
-      ...(cleanupPending ? { message: "Новое изображение сохранено. Предыдущая копия пока не удалена." } : {}) });
   });
 
   router.delete("/menu/dishes/:dishId/image", requireOrigin(config), requireCsrf, async (request, response) => {
@@ -286,23 +331,25 @@ export function createManageMenuRouter(config: ServerConfig, imageStorage: DishI
       return;
     }
     try {
-      const dish = await Dish.findOne({ _id: dishId, cafeId: request.auth!.cafe.id }).select("+imagePublicId");
+      const cafeId = request.auth!.cafe.id;
+      const dish = await Dish.findOne({ _id: dishId, cafeId }).select("+imagePublicId +pendingImagePublicIds").lean();
       if (!dish) { response.status(404).json({ message: "Блюдо в этом кафе не найдено." }); return; }
-      const oldPublicId = dish.imagePublicId;
-      dish.imagePublicId = undefined;
-      dish.imageUrl = undefined;
-      await dish.save();
-      let cleanupPending = false;
-      if (oldPublicId) {
-        try { await imageStorage.remove(oldPublicId); }
-        catch { cleanupPending = true; console.error("Не удалось удалить изображение из хранилища после снятия с меню."); }
+      if (dish.imagePublicId) {
+        const removedFromMenu = await Dish.findOneAndUpdate(
+          imageVersionFilter(cafeId, dishId, dish.imagePublicId),
+          { $unset: { imagePublicId: 1, imageUrl: 1 }, $addToSet: { pendingImagePublicIds: dish.imagePublicId } },
+          { returnDocument: "after" },
+        );
+        if (!removedFromMenu) {
+          response.status(409).json({ message: "Изображение блюда уже изменилось. Обновите страницу и повторите попытку.", cleanupPending: false });
+          return;
+        }
       }
+      const cleanupPending = await cleanupPendingImages(cafeId, dishId, imageStorage);
       response.json({ imageUrl: null, cleanupPending,
-        message: cleanupPending ? "Изображение удалено из меню. Удаление файла из хранилища ожидает повтора." : "Изображение удалено." });
+        message: cleanupPending ? "Фото убрано из меню. Удаление файла будет повторено при следующем запросе." : "Изображение удалено." });
     } catch (error) {
-      if (error instanceof ImageStorageUnavailableError || error instanceof ImageStorageProviderError) {
-        response.status(502).json({ message: "Не удалось удалить изображение из хранилища." });
-      } else sendWriteError(response, error, "Не удалось удалить изображение блюда.");
+      sendWriteError(response, error, "Не удалось удалить изображение блюда.");
     }
   });
 

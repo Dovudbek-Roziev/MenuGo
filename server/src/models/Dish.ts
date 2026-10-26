@@ -11,6 +11,7 @@ const dishSchema = new Schema({
   isAvailable: { type: Boolean, required: true, default: true },
   imagePublicId: { type: String, default: undefined, select: false, maxlength: 200 },
   imageUrl: { type: String, default: undefined, maxlength: 2048 },
+  pendingImagePublicIds: { type: [String], default: [], select: false },
 });
 
 dishSchema.index({ cafeId: 1, categoryId: 1, name: 1 }, { unique: true });
