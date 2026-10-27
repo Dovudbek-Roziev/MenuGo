@@ -4,6 +4,7 @@ import { cartLines, cartStorageKey, changeQuantity, readCart, reconcileCart, wri
 import CartDialog, { orderErrorCopy } from "./CartDialog";
 import { clearPending, pendingStorageKey, readPending, savePending, submitOrder, OrderRequestError, type OrderErrorKind, type OrderReceipt, type PendingOrder } from "./orders";
 import { MenuRequestError, type GuestMenuData, type MenuErrorKind } from "./types";
+import { receiptCopy } from "./receipt";
 import "./guest-menu.css";
 
 type ViewState =
@@ -211,12 +212,12 @@ export default function GuestMenu({ cafeSlug, tableCode }: { cafeSlug: string; t
         {receipt && (!cartOpen || !data) && (
           <section className="guest-order-state" role="status" aria-labelledby="sent-order-title">
             <p className="guest-kicker">ПОДТВЕРЖДЕНИЕ</p>
-            <h2 id="sent-order-title">Заказ отправлен</h2>
+            <h2 id="sent-order-title">{receiptCopy[receipt.status].title}</h2>
             <p>Номер заказа: <strong>{receipt.id}</strong></p>
             <p>{receipt.table.name}</p>
             <ul>{receipt.items.map((item) => <li key={item.dishId}>{item.name} · {item.quantity} × {price.format(item.priceSom)} сом — {price.format(item.lineTotalSom)} сом</li>)}</ul>
             <p><strong>Итого: {price.format(receipt.totalSom)} сом</strong></p>
-            <p>Заказ сохранён со статусом «Новый». Подтверждение сотрудника пока не получено.</p>
+            <p>{receiptCopy[receipt.status].detail}</p>
           </section>
         )}
 

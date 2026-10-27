@@ -10,6 +10,7 @@ export interface ManagedDish {
   sortOrder: number;
   isAvailable: boolean;
   imageUrl?: string;
+  cleanupPending?: boolean;
 }
 
 export interface ManagedCategory {
@@ -39,7 +40,8 @@ function validDish(value: unknown): value is ManagedDish {
     typeof value.name === "string" && typeof value.description === "string" &&
     Number.isSafeInteger(value.priceSom) && (value.priceSom as number) >= 0 &&
     Number.isSafeInteger(value.sortOrder) && (value.sortOrder as number) >= 0 &&
-    typeof value.isAvailable === "boolean" && (value.imageUrl === undefined || typeof value.imageUrl === "string");
+    typeof value.isAvailable === "boolean" && (value.imageUrl === undefined || typeof value.imageUrl === "string") &&
+    (value.cleanupPending === undefined || typeof value.cleanupPending === "boolean");
 }
 
 function validCategory(value: unknown): value is ManagedCategory {
@@ -167,4 +169,13 @@ export function uploadDishImage(id: string, file: File): Promise<DishImageResult
 
 export function removeDishImage(id: string): Promise<DishImageResult> {
   return dishImageRequest(id, "DELETE");
+}
+
+export async function retryDishImageCleanup(id: string): Promise<DishImageResult> {
+  const data = await request<unknown>(`/menu/dishes/${encodeURIComponent(id)}/image/cleanup`, "POST");
+  if (!isRecord(data) || !(data.imageUrl === null || typeof data.imageUrl === "string") || typeof data.cleanupPending !== "boolean") {
+    throw new ManageApiError(503, "UNAVAILABLE", "Сервер вернул некорректный ответ об очистке изображения.");
+  }
+  return { imageUrl: data.imageUrl, cleanupPending: data.cleanupPending,
+    ...(typeof data.message === "string" ? { message: data.message } : {}) };
 }

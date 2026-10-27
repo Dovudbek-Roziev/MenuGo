@@ -1,19 +1,11 @@
 import { apiBase } from "./api";
+import { isReceipt, type OrderReceipt } from "./receipt";
+export type { OrderReceipt } from "./receipt";
 
 export interface PendingOrder {
   requestId: string;
   items: { dishId: string; quantity: number }[];
   expectedTotalSom: number;
-}
-
-export interface OrderReceipt {
-  id: string;
-  table: { name: string };
-  items: { dishId: string; name: string; priceSom: number; quantity: number; lineTotalSom: number }[];
-  totalSom: number;
-  currency: "KGS";
-  status: "new";
-  createdAt: string;
 }
 
 export type OrderErrorKind = "bad_request" | "not_found" | "price_changed" | "conflict" | "rate_limited" | "unavailable" | "network" | "server";
@@ -61,22 +53,6 @@ function retryAt(header: string | null): number | undefined {
   const seconds = Number(header);
   const time = Number.isFinite(seconds) && seconds >= 0 ? Date.now() + seconds * 1000 : Date.parse(header);
   return Number.isFinite(time) ? time : undefined;
-}
-
-function isReceipt(value: unknown): value is OrderReceipt {
-  if (!record(value) || typeof value.id !== "string" || !objectId.test(value.id) ||
-      !record(value.table) || typeof value.table.name !== "string" || !safeSom(value.totalSom) ||
-      value.currency !== "KGS" || value.status !== "new" || typeof value.createdAt !== "string" ||
-      !Array.isArray(value.items) || value.items.length === 0) return false;
-  let sum = 0;
-  for (const item of value.items) {
-    if (!record(item) || typeof item.dishId !== "string" || !objectId.test(item.dishId) ||
-        typeof item.name !== "string" || !safeSom(item.priceSom) ||
-        !Number.isInteger(item.quantity) || (item.quantity as number) < 1 || (item.quantity as number) > 99 ||
-        !safeSom(item.lineTotalSom) || item.priceSom * (item.quantity as number) !== item.lineTotalSom) return false;
-    sum += item.lineTotalSom;
-  }
-  return Number.isSafeInteger(sum) && sum === value.totalSom;
 }
 
 export async function submitOrder(cafeSlug: string, tableCode: string, pending: PendingOrder): Promise<OrderReceipt> {

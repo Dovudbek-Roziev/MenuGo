@@ -1,6 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 import type { CartLine } from "./cart";
 import type { OrderErrorKind, OrderReceipt } from "./orders";
+import { receiptCopy } from "./receipt";
 
 interface Props {
   lines: CartLine[];
@@ -68,16 +69,16 @@ export default function CartDialog({ lines, total, onClose, onChange, onClear, o
   return (
     <div className="cart-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="cart-dialog" role="dialog" aria-modal="true" aria-labelledby="cart-title" ref={dialogRef}>
-        <div className="cart-top"><div><span className="guest-kicker">{receipt ? "ПОДТВЕРЖДЕНИЕ" : "ВАШ ВЫБОР"}</span><h2 id="cart-title">{receipt ? "Заказ отправлен" : "Корзина"}</h2></div><button ref={closeRef} type="button" className="cart-close" onClick={onClose} aria-label="Закрыть окно">×</button></div>
+        <div className="cart-top"><div><span className="guest-kicker">{receipt ? "ПОДТВЕРЖДЕНИЕ" : "ВАШ ВЫБОР"}</span><h2 id="cart-title">{receipt ? receiptCopy[receipt.status].title : "Корзина"}</h2></div><button ref={closeRef} type="button" className="cart-close" onClick={onClose} aria-label="Закрыть окно">×</button></div>
         <div className="cart-content">
           {receipt ? (
             <div className="cart-receipt" role="status">
-              <h3 ref={receiptRef} tabIndex={-1}>Заказ отправлен</h3>
+              <h3 ref={receiptRef} tabIndex={-1}>{receiptCopy[receipt.status].title}</h3>
               <p>Номер заказа: <strong>{receipt.id}</strong></p>
               <p>{receipt.table.name} · {new Date(receipt.createdAt).toLocaleString("ru-RU")}</p>
               <ul>{receipt.items.map((item) => <li key={item.dishId}><span>{item.name} · {item.quantity} × {format.format(item.priceSom)} сом</span><strong>{format.format(item.lineTotalSom)} сом</strong></li>)}</ul>
               <div className="cart-total"><span>Итого</span><strong>{format.format(receipt.totalSom)} сом</strong></div>
-              <p>Заказ сохранён со статусом «Новый». Подтверждение сотрудника пока не получено.</p>
+              <p>{receiptCopy[receipt.status].detail}</p>
             </div>
           ) : lines.length ? (
             <ul className="cart-lines">

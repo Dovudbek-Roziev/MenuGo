@@ -242,6 +242,30 @@ async function main() {
     savedDish = await Dish.findById(dish.id).select("+imagePublicId +pendingImagePublicIds");
     assert.equal(savedDish?.imagePublicId, `verification/${suffix}/3`);
     assert.deepEqual(savedDish?.pendingImagePublicIds, [`verification/${suffix}/2`]);
+    const pendingListing = await call(managePath, { cookie: ownerSession.cookie });
+    const pendingListedDish = pendingListing.body.categories.flatMap((item: any) => item.dishes).find((item: any) => item.id === dish.id);
+    assert.equal(pendingListedDish.cleanupPending, true);
+    assert.equal("pendingImagePublicIds" in pendingListedDish || "imagePublicId" in pendingListedDish, false);
+    const cleanupPath = `${imagePath(dish.id)}/cleanup`;
+    assert.equal((await call(cleanupPath, { method: "POST", ...staffSession })).status, 403);
+    assert.equal((await call(`${imagePath(foreignDish.id)}/cleanup`, { method: "POST", ...ownerSession })).status, 404);
+    assert.equal((await call(cleanupPath, { method: "POST", cookie: ownerSession.cookie, origin: "https://invalid.example", csrf: ownerSession.csrf })).status, 403);
+    assert.equal((await call(cleanupPath, { method: "POST", cookie: ownerSession.cookie })).status, 403);
+    failImageRemove = true;
+    const stillPending = await call(cleanupPath, { method: "POST", ...ownerSession });
+    failImageRemove = false;
+    assert.equal(stillPending.status, 200);
+    assert.equal(stillPending.body.cleanupPending, true);
+    assert.deepEqual((await Dish.findById(dish.id).select("+pendingImagePublicIds"))?.pendingImagePublicIds,
+      [`verification/${suffix}/2`]);
+    const cleanupOnly = await call(cleanupPath, { method: "POST", ...ownerSession });
+    assert.equal(cleanupOnly.status, 200);
+    assert.equal(cleanupOnly.body.cleanupPending, false);
+    assert.equal(cleanupOnly.body.imageUrl, replacementCleanupFailure.body.imageUrl);
+    assert.equal(removedImages.includes(`verification/${suffix}/2`), true);
+    assert.equal(removedImages.includes(`verification/${suffix}/3`), false);
+    assert.equal((await call(managePath, { cookie: ownerSession.cookie })).body.categories
+      .flatMap((item: any) => item.dishes).find((item: any) => item.id === dish.id).cleanupPending, false);
     const removalRetriesReplacement = await call(imagePath(dish.id), { method: "DELETE", ...ownerSession });
     assert.equal(removalRetriesReplacement.status, 200);
     assert.equal(removalRetriesReplacement.body.cleanupPending, false);

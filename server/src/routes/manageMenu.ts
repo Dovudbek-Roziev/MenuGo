@@ -74,9 +74,10 @@ function categoryJson(category: { _id: Types.ObjectId; name: string; sortOrder: 
   return { id: category._id.toString(), name: category.name, sortOrder: category.sortOrder, isActive: category.isActive };
 }
 
-function dishJson(dish: { _id: Types.ObjectId; categoryId: Types.ObjectId; name: string; description: string; priceSom: number; sortOrder: number; isAvailable: boolean; imageUrl?: string | null }) {
+function dishJson(dish: { _id: Types.ObjectId; categoryId: Types.ObjectId; name: string; description: string; priceSom: number; sortOrder: number; isAvailable: boolean; imageUrl?: string | null; pendingImagePublicIds?: string[] }) {
   return { id: dish._id.toString(), categoryId: dish.categoryId.toString(), name: dish.name,
     description: dish.description, priceSom: dish.priceSom, sortOrder: dish.sortOrder, isAvailable: dish.isAvailable,
+    cleanupPending: (dish.pendingImagePublicIds?.length ?? 0) > 0,
     ...(dish.imageUrl ? { imageUrl: dish.imageUrl } : {}) };
 }
 
@@ -143,7 +144,7 @@ export function createManageMenuRouter(config: ServerConfig, imageStorage: DishI
       const [categories, dishes] = await Promise.all([
         Category.find({ cafeId }).sort({ sortOrder: 1, _id: 1 }).select("_id name sortOrder isActive").lean(),
         Dish.find({ cafeId }).sort({ sortOrder: 1, _id: 1 })
-          .select("_id categoryId name description priceSom sortOrder isAvailable imageUrl").lean(),
+          .select("_id categoryId name description priceSom sortOrder isAvailable imageUrl +pendingImagePublicIds").lean(),
       ]);
       const byCategory = new Map<string, ReturnType<typeof dishJson>[]>();
       for (const dish of dishes) {
@@ -241,7 +242,7 @@ export function createManageMenuRouter(config: ServerConfig, imageStorage: DishI
     }
     try {
       const cafeId = request.auth!.cafe.id;
-      const dish = await Dish.findOne({ _id: dishId, cafeId });
+      const dish = await Dish.findOne({ _id: dishId, cafeId }).select("+pendingImagePublicIds");
       if (!dish) { response.status(404).json({ message: "Блюдо в этом кафе не найдено." }); return; }
       if ("categoryId" in body) {
         const category = await Category.findOne({ _id: body.categoryId, cafeId }).select("_id").lean();
@@ -350,6 +351,27 @@ export function createManageMenuRouter(config: ServerConfig, imageStorage: DishI
         message: cleanupPending ? "Фото убрано из меню. Удаление файла будет повторено при следующем запросе." : "Изображение удалено." });
     } catch (error) {
       sendWriteError(response, error, "Не удалось удалить изображение блюда.");
+    }
+  });
+
+  router.post("/menu/dishes/:dishId/image/cleanup", requireOrigin(config), requireCsrf, async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    if (!databaseReady(response, config)) return;
+    const dishId = request.params.dishId;
+    if (typeof dishId !== "string" || !objectIdPattern.test(dishId)) {
+      response.status(400).json({ message: "Некорректный идентификатор блюда." });
+      return;
+    }
+    try {
+      const cafeId = request.auth!.cafe.id;
+      const dish = await Dish.findOne({ _id: dishId, cafeId }).select("_id").lean();
+      if (!dish) { response.status(404).json({ message: "Блюдо в этом кафе не найдено." }); return; }
+      const cleanupPending = await cleanupPendingImages(cafeId, dishId, imageStorage);
+      const current = await Dish.findOne({ _id: dishId, cafeId }).select("imageUrl").lean();
+      response.json({ imageUrl: current?.imageUrl ?? null, cleanupPending,
+        message: cleanupPending ? "Не все старые файлы удалены. Повторите очистку позже." : "Очистка старых файлов завершена." });
+    } catch (error) {
+      sendWriteError(response, error, "Не удалось повторить очистку изображений блюда.");
     }
   });
 

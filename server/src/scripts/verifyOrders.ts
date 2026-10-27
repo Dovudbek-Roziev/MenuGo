@@ -61,10 +61,21 @@ async function verify() {
     assert.equal(stored?.items[0]?.priceSom, 125);
 
     await Dish.updateOne({ _id: dishA._id }, { $set: { priceSom: 200 } });
+    // A lost initial response must still confirm the original request after staff changes its status.
+    await Order.updateOne({ _id: first.body.id }, { $set: { status: "preparing" } });
     const repeat = await post(base, { requestId, items: items.toReversed(), expectedTotalSom: 330 });
     assert.equal(repeat.status, 200);
     assert.equal(repeat.body.id, first.body.id);
     assert.equal(repeat.body.totalSom, 330);
+    assert.equal(repeat.body.status, "preparing");
+    for (const status of ["ready", "completed"] as const) {
+      await Order.updateOne({ _id: first.body.id }, { $set: { status } });
+      const retry = await post(base, { requestId, items, expectedTotalSom: 330 });
+      assert.equal(retry.status, 200);
+      assert.equal(retry.body.id, first.body.id);
+      assert.equal(retry.body.status, status);
+    }
+    assert.equal(await Order.countDocuments({ requestId }), 1);
     assert.equal((await post(base, { requestId, items: [{ dishId: dishA.id, quantity: 1 }], expectedTotalSom: 200 })).status, 409);
 
     const staleRequestId = randomUUID();
