@@ -14,6 +14,7 @@ import Router from "./Router";
 import "./styles.css";
 import "./auth/auth.css";
 import "./auth/manage-menu.css";
+import "./auth/orders.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
