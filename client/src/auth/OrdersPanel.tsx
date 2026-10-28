@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { AuthApiError } from "./api";
 import { refreshCsrf } from "./state";
+import { OrderReadGate } from "./orderReadGate";
 import {
   changeOrderStatus, fetchOrders, nextStatus, orderStatuses, OrdersApiError, statusNames,
   type ManagedOrder, type OrderFilter, type OrderStatus, type OrdersPage,
@@ -57,7 +58,7 @@ export default function OrdersPanel({ active }: { active: boolean }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<{ text: string; csrf?: boolean } | null>(null);
+  const [actionError, setActionError] = useState<{ text: string; csrf?: boolean; uncertain?: boolean } | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [needsCheck, setNeedsCheck] = useState(false);
   const [busyOrder, setBusyOrder] = useState<string | null>(null);
@@ -65,7 +66,7 @@ export default function OrdersPanel({ active }: { active: boolean }) {
   const activeRef = useRef(active);
   const busyRef = useRef(false);
   const confirmRef = useRef(false);
-  const serial = useRef(0);
+  const readGate = useRef(new OrderReadGate());
   const requestRef = useRef<AbortController | null>(null);
   const deferred = useRef<{ serial: number; page: OrdersPage } | null>(null);
   const refreshRef = useRef<HTMLButtonElement>(null);
@@ -75,10 +76,12 @@ export default function OrdersPanel({ active }: { active: boolean }) {
   activeRef.current = active;
   confirmRef.current = confirmOrder !== null;
 
-  const applyPage = useCallback((result: OrdersPage) => {
+  const applyPage = useCallback((result: OrdersPage, read: number) => {
+    if (!readGate.current.confirm(read)) return;
     setData(result);
     setReadError(null);
     setNeedsCheck(false);
+    setActionError((current) => current?.uncertain ? null : current);
     if (result.pagination.totalPages > 0 && result.pagination.page > result.pagination.totalPages) {
       setPage(result.pagination.totalPages);
     }
@@ -86,7 +89,7 @@ export default function OrdersPanel({ active }: { active: boolean }) {
 
   const load = useCallback(async (mode: "initial" | "manual" | "poll" = "manual") => {
     if (!activeRef.current || (mode === "poll" && document.visibilityState !== "visible")) return;
-    const current = ++serial.current;
+    const current = readGate.current.beginRead();
     requestRef.current?.abort();
     deferred.current = null;
     const controller = new AbortController();
@@ -95,19 +98,19 @@ export default function OrdersPanel({ active }: { active: boolean }) {
     if (mode === "manual") setRefreshing(true);
     try {
       const result = await fetchOrders(filter, page, controller.signal);
-      if (controller.signal.aborted || current !== serial.current || !activeRef.current) return;
+      if (controller.signal.aborted || !readGate.current.mayApply(current) || !activeRef.current) return;
       const focusedCard = (document.activeElement as Element | null)?.closest?.(".orders-card");
       if (mode === "poll" && (confirmRef.current || busyRef.current || focusedCard)) {
         deferred.current = { serial: current, page: result };
       } else {
-        applyPage(result);
+        applyPage(result, current);
       }
     } catch (error) {
-      if (controller.signal.aborted || current !== serial.current || !activeRef.current) return;
+      if (controller.signal.aborted || !readGate.current.mayApply(current) || !activeRef.current) return;
       setReadError(errorCopy(error));
       setNeedsCheck(true);
     } finally {
-      if (current === serial.current) {
+      if (readGate.current.isCurrent(current)) {
         requestRef.current = null;
         setLoading(false);
         setRefreshing(false);
@@ -120,7 +123,7 @@ export default function OrdersPanel({ active }: { active: boolean }) {
   useEffect(() => {
     if (!active) {
       activeRef.current = false;
-      ++serial.current;
+      readGate.current.invalidate();
       requestRef.current?.abort();
       deferred.current = null;
       return;
@@ -129,7 +132,7 @@ export default function OrdersPanel({ active }: { active: boolean }) {
     void load("initial");
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void load("poll"); }, 15_000);
     const visibility = () => {
-      if (document.visibilityState === "hidden") { ++serial.current; requestRef.current?.abort(); deferred.current = null; }
+      if (document.visibilityState === "hidden") { readGate.current.invalidate(); requestRef.current?.abort(); deferred.current = null; }
       else void load("poll");
     };
     document.addEventListener("visibilitychange", visibility);
@@ -137,7 +140,7 @@ export default function OrdersPanel({ active }: { active: boolean }) {
       activeRef.current = false;
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", visibility);
-      ++serial.current;
+      readGate.current.invalidate();
       requestRef.current?.abort();
       deferred.current = null;
     };
@@ -145,14 +148,14 @@ export default function OrdersPanel({ active }: { active: boolean }) {
 
   function changeQuery(nextFilter: OrderFilter, nextPage: number) {
     queryKey.current = `${nextFilter}:${nextPage}`;
-    ++serial.current;
+    readGate.current.invalidate();
     requestRef.current?.abort();
     deferred.current = null;
     setData(null);
     setReadError(null);
     setActionError(null);
     setActionNotice(null);
-    setNeedsCheck(false);
+    if (!readGate.current.verificationRequired) setNeedsCheck(false);
     setFilter(nextFilter);
     setPage(nextPage);
   }
@@ -162,15 +165,18 @@ export default function OrdersPanel({ active }: { active: boolean }) {
       if (!activeRef.current || confirmRef.current || busyRef.current ||
           (document.activeElement as Element | null)?.closest?.(".orders-card")) return;
       const pending = deferred.current;
-      if (pending && pending.serial === serial.current) { deferred.current = null; applyPage(pending.page); }
+      if (pending && readGate.current.mayApply(pending.serial)) {
+        deferred.current = null;
+        applyPage(pending.page, pending.serial);
+      }
     }, 0);
   }
 
   async function update(order: ManagedOrder, next: OrderStatus) {
-    if (busyRef.current || needsCheck) return;
+    if (busyRef.current || needsCheck || readGate.current.verificationRequired) return;
     const actionQuery = queryKey.current;
     busyRef.current = true;
-    ++serial.current;
+    readGate.current.invalidate();
     requestRef.current?.abort();
     deferred.current = null;
     setBusyOrder(order.id);
@@ -190,13 +196,21 @@ export default function OrdersPanel({ active }: { active: boolean }) {
     } catch (error) {
       if (!activeRef.current) return;
       if (error instanceof OrdersApiError && error.status === 409) {
+        readGate.current.requireVerification();
+        requestRef.current?.abort();
+        deferred.current = null;
+        setRefreshing(false);
         setNeedsCheck(true);
         setActionError({ text: "Заказ уже изменён другим сотрудником. Список обновляется." });
         refreshRef.current?.focus();
         void loadRef.current("manual");
       } else if (error instanceof OrdersApiError && (error.code === "NETWORK" || error.code === "UNAVAILABLE")) {
+        readGate.current.requireVerification();
+        requestRef.current?.abort();
+        deferred.current = null;
+        setRefreshing(false);
         setNeedsCheck(true);
-        setActionError({ text: error.code === "UNAVAILABLE"
+        setActionError({ uncertain: true, text: error.code === "UNAVAILABLE"
           ? "Сервис заказов временно недоступен. Результат изменения не подтверждён. Проверьте статус перед следующим действием."
           : "Результат изменения неизвестен. Проверьте статус заказа перед следующим действием." });
       } else {

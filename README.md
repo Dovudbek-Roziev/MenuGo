@@ -44,6 +44,7 @@ npm run dev
 npm run typecheck
 npm run build
 npm run verify:receipt
+npm run verify:orders-panel
 npm run preview
 ```
 
