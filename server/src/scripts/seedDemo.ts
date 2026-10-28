@@ -1,4 +1,5 @@
 import mongoose, { Types } from "mongoose";
+import { randomBytes } from "node:crypto";
 import { readConfig } from "../config.js";
 import { Cafe } from "../models/Cafe.js";
 import { CafeTable } from "../models/Table.js";
@@ -10,6 +11,7 @@ const cafeId = id("0001");
 const tableId = id("0002");
 const drinksId = id("0003");
 const foodId = id("0004");
+const legacyDemoQrCode = "menugo-demo-table-04";
 
 async function seed(): Promise<void> {
   const { mongoUri } = readConfig();
@@ -31,14 +33,17 @@ async function seed(): Promise<void> {
   const existingTable = await CafeTable.findById(tableId);
   if (existingTable && (
     !existingTable.cafeId.equals(cafeId) ||
-    existingTable.name !== "Стол 4" ||
-    existingTable.qrCode !== "menugo-demo-table-04"
+    existingTable.name !== "Стол 4"
   )) {
     throw new Error("Зарезервированный идентификатор демо-стола занят. Данные не изменены.");
   }
   if (!existingTable) {
     await CafeTable.create({
-      _id: tableId, cafeId, name: "Стол 4", qrCode: "menugo-demo-table-04", isActive: true,
+      _id: tableId, cafeId, name: "Стол 4", qrCode: randomBytes(32).toString("base64url"), isActive: true,
+    });
+  } else if (existingTable.qrCode === legacyDemoQrCode) {
+    await CafeTable.updateOne({ _id: tableId, cafeId, qrCode: legacyDemoQrCode }, {
+      $set: { qrCode: randomBytes(32).toString("base64url") },
     });
   }
 
@@ -76,7 +81,9 @@ async function seed(): Promise<void> {
     }
   }
 
+  const demoTable = await CafeTable.findById(tableId).select("qrCode").lean();
   console.info("Демо-меню готово: одно кафе, один стол, две категории и четыре блюда.");
+  console.info(`Гостевая ссылка: http://127.0.0.1:5173/menu/menugo-demo-seed/${demoTable?.qrCode ?? ""}`);
 }
 
 try {

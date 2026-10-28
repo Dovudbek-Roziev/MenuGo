@@ -14,6 +14,7 @@
     "verify:auth": "node --env-file-if-exists=.env --import tsx src/scripts/verifyAuth.ts",
     "verify:manage-menu": "node --env-file-if-exists=.env --import tsx src/scripts/verifyManageMenu.ts",
     "verify:manage-orders": "node --env-file-if-exists=.env --import tsx src/scripts/verifyManageOrders.ts",
+    "verify:manage-tables": "node --env-file-if-exists=.env --import tsx src/scripts/verifyManageTables.ts",
     "verify:orders": "node --env-file-if-exists=.env --import tsx src/scripts/verifyOrders.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc"
